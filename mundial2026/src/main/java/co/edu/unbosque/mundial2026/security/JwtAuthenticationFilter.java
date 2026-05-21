@@ -10,6 +10,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -24,19 +25,25 @@ import jakarta.servlet.http.HttpServletResponse;
  * en la plataforma Mundial 2026 Hub.
  * <p>
  * Extiende {@link OncePerRequestFilter} para garantizar que se ejecuta
- * exactamente una vez por petición, sin importar cuántos filtros haya en la
- * cadena. El flujo es:
+ * exactamente una vez por petición. El flujo es:
  * <ol>
  *   <li>Extrae el token JWT del header {@code Authorization: Bearer <token>}.</li>
  *   <li>Extrae el username del subject del token.</li>
  *   <li>Si el username es válido y no hay autenticación activa, carga el
  *       {@link UserDetails} desde la base de datos.</li>
  *   <li>Valida el token contra el usuario cargado.</li>
- *   <li>Si es válido, establece la autenticación en el
+ *   <li>Si todo es válido, establece la autenticación en el
  *       {@link SecurityContextHolder} para que Spring Security la use
  *       en la autorización del endpoint.</li>
  * </ol>
- * Sigue el mismo patrón del proyecto VirusDetected.
+ * </p>
+ * <p>
+ * <b>Comportamiento ante tokens inválidos:</b> si el JWT está malformado,
+ * expirado, firmado con otra clave o apunta a un usuario inexistente, el
+ * filtro registra un WARN y deja seguir la petición SIN autenticación. Spring
+ * Security responderá 401 si el endpoint requiere autenticación, o procesará
+ * la petición normalmente si el endpoint es público (caso típico:
+ * {@code /auth/login} cuando el navegador conserva un JWT obsoleto).
  * </p>
  */
 @Component
@@ -68,9 +75,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
      * <p>
      * Extrae el JWT del header Authorization, valida su firma e integridad,
      * y si es válido establece la autenticación en el contexto de seguridad.
-     * Si el token es inválido o está ausente, la petición continúa sin
-     * autenticación y Spring Security rechazará el acceso en endpoints
-     * protegidos.
+     * Si el token es inválido o el usuario ya no existe, la petición continúa
+     * sin autenticación; Spring Security rechazará después solo si el endpoint
+     * requiere autenticación.
      * </p>
      *
      * @param request     La petición HTTP entrante.
@@ -96,24 +103,36 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             try {
                 username = jwtUtil.extractUsername(jwt);
             } catch (Exception e) {
-                logger.error("Error al extraer el username del token JWT: " + e.getMessage());
+                // Token mal formado, expirado o firmado con otra clave.
+                // No es razón para tirar la petición; solo seguimos sin auth.
+                logger.warn("Token JWT inválido o ilegible: " + e.getMessage());
             }
         }
 
         // Si hay username y no hay autenticación activa en el contexto de seguridad
         if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = this.userDetailsService.loadUserByUsername(username);
+            try {
+                UserDetails userDetails = this.userDetailsService.loadUserByUsername(username);
 
-            if (jwtUtil.validateToken(jwt, userDetails)) {
-                UsernamePasswordAuthenticationToken authenticationToken =
-                        new UsernamePasswordAuthenticationToken(
-                                userDetails,
-                                null,
-                                userDetails.getAuthorities()
-                        );
-                authenticationToken.setDetails(
-                        new WebAuthenticationDetailsSource().buildDetails(request));
-                SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+                if (jwtUtil.validateToken(jwt, userDetails)) {
+                    UsernamePasswordAuthenticationToken authenticationToken =
+                            new UsernamePasswordAuthenticationToken(
+                                    userDetails,
+                                    null,
+                                    userDetails.getAuthorities()
+                            );
+                    authenticationToken.setDetails(
+                            new WebAuthenticationDetailsSource().buildDetails(request));
+                    SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+                }
+            } catch (UsernameNotFoundException e) {
+                // El JWT apunta a un usuario que ya no existe (BD limpia, refactor,
+                // cuenta eliminada). Se ignora el token y se sigue sin autenticación.
+                logger.warn("JWT con username inexistente: " + username
+                        + " — se ignora el token y se continúa sin autenticación.");
+            } catch (Exception e) {
+                // Cualquier otro error inesperado al validar: log y continuar.
+                logger.warn("Error inesperado validando JWT: " + e.getMessage());
             }
         }
 

@@ -76,6 +76,8 @@ public class SecurityConfig {
      * <p>
      * Se deshabilita CSRF debido a que la aplicación es stateless, se habilita CORS,
      * se configuran las reglas de autorización y se establece la política de sesiones.
+     * Las peticiones OPTIONS (preflight de CORS) se permiten explícitamente para
+     * que el navegador pueda completar el handshake antes del POST real.
      * </p>
      *
      * @param http objeto de configuración HTTP
@@ -88,6 +90,9 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .authorizeHttpRequests(auth -> {
+
+                // Preflight CORS — debe permitirse SIEMPRE sin autenticación
+                auth.requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll();
 
                 // Rutas públicas
                 auth.requestMatchers("/auth/**").permitAll();
@@ -152,6 +157,12 @@ public class SecurityConfig {
 
     /**
      * Configura la política de CORS de la aplicación.
+     * <p>
+     * Incluye el puerto {@code 5173} usado por Vite en desarrollo, además de
+     * los puertos tradicionales de Angular/React (4200, 3000) y de Vue/Tomcat
+     * (8080/8081/8082). Permite todos los headers y todos los métodos HTTP
+     * relevantes para la API REST, incluyendo OPTIONS para el preflight.
+     * </p>
      *
      * @return fuente de configuración CORS
      */
@@ -160,18 +171,21 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
 
         configuration.setAllowedOrigins(Arrays.asList(
+                "http://localhost:3000",
+                "http://localhost:4200",
+                "http://localhost:5173",
                 "http://localhost:8080",
                 "http://localhost:8081",
-                "http://localhost:8082",
-                "http://localhost:4200",
-                "http://localhost:3000"
+                "http://localhost:8082"
         ));
 
         configuration.setAllowedMethods(Arrays.asList(
                 "GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
 
         configuration.setAllowedHeaders(List.of("*"));
+        configuration.setExposedHeaders(List.of("Authorization"));
         configuration.setAllowCredentials(true);
+        configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source =
                 new UrlBasedCorsConfigurationSource();

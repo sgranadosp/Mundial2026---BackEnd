@@ -16,17 +16,11 @@ import co.edu.unbosque.mundial2026.repository.UserRepository;
  * plataforma Mundial 2026 Hub.
  * <p>
  * Spring Security llama a {@link #loadUserByUsername(String)} durante el
- * proceso de autenticación para cargar los detalles del usuario desde la base
- * de datos. En esta aplicación el "username" que llega al método puede ser
- * realmente el <b>username</b> O el <b>email</b> del usuario (ambos encriptados
- * con AES, ya que el {@link co.edu.unbosque.mundial2026.controller.AuthController}
- * encripta el identificador entrante antes de delegar al
- * {@code AuthenticationManager}).
- * </p>
- * <p>
- * Por eso este servicio busca primero por username; si no encuentra, busca
- * por email. La entidad {@link co.edu.unbosque.mundial2026.model.User} implementa
- * {@link UserDetails}, por lo que puede retornarse directamente sin conversión.
+ * proceso de autenticación. En esta aplicación,
+ * {@link co.edu.unbosque.mundial2026.controller.AuthController} ya resolvió
+ * el identificador entrante (que puede ser un username o un email en texto
+ * plano) a su {@code username} en texto plano antes de delegar al
+ * {@code AuthenticationManager}, por lo que aquí siempre se recibe un username.
  * </p>
  */
 @Service
@@ -47,30 +41,23 @@ public class UserDetailsServiceImpl implements UserDetailsService {
     }
 
     /**
-     * Carga los detalles del usuario a partir de su identificador encriptado.
+     * Carga los detalles del usuario a partir de su username en texto plano.
      * <p>
-     * El identificador puede ser tanto el username como el email del usuario
-     * (ambos encriptados con AES). El método:
-     * <ol>
-     *   <li>Intenta primero buscar por username.</li>
-     *   <li>Si no encuentra, intenta buscar por email.</li>
-     *   <li>Si tampoco encuentra, lanza {@link UsernameNotFoundException}.</li>
-     * </ol>
+     * La entidad {@link co.edu.unbosque.mundial2026.model.User} implementa
+     * {@link UserDetails}, por lo que puede retornarse directamente sin
+     * conversión adicional.
      * </p>
      *
-     * @param identifier El identificador encriptado con AES del usuario.
-     *                   Puede ser su username o su email.
+     * @param username El username (texto plano) del usuario.
      * @return El objeto {@link UserDetails} correspondiente.
      * @throws UsernameNotFoundException Si no existe ningún usuario con ese
-     *                                   identificador en la base de datos.
+     *                                   username en la base de datos.
      */
     @Override
-    public UserDetails loadUserByUsername(String identifier) throws UsernameNotFoundException {
-        return userRepository.findByUsername(identifier)
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        return userRepository.findByUsername(username)
                 .<UserDetails>map(u -> u)
-                .orElseGet(() -> userRepository.findByEmail(identifier)
-                        .<UserDetails>map(u -> u)
-                        .orElseThrow(() -> new UsernameNotFoundException(
-                                "Usuario no encontrado con identificador: " + identifier)));
+                .orElseThrow(() -> new UsernameNotFoundException(
+                        "Usuario no encontrado con username: " + username));
     }
 }

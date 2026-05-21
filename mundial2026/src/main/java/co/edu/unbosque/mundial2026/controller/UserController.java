@@ -10,7 +10,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -33,12 +32,12 @@ import io.swagger.v3.oas.annotations.tags.Tag;
  * Expone endpoints para operaciones de perfil del usuario autenticado (HU04,
  * HU05) y operaciones administrativas reservadas para el rol ADMIN (HU16, HU17,
  * HU18, HU19, HU26, HU29). La protección por rol se configura en
- * {@code SecurityConfig}. Todos los endpoints requieren token JWT Bearer.
+ * {@code SecurityConfig}. La política CORS se gestiona centralmente en
+ * {@code SecurityConfig.corsConfigurationSource()}. Todos los endpoints
+ * requieren token JWT Bearer.
  */
 @RestController
 @RequestMapping("/users")
-@CrossOrigin(origins = { "http://localhost:8080", "http://localhost:8081", "http://localhost:8082",
-        "http://localhost:4200", "http://localhost:3000" })
 @Transactional
 @Tag(name = "Usuarios", description = "Gestión de perfiles y administración de cuentas")
 @SecurityRequirement(name = "bearerAuth")
@@ -70,11 +69,11 @@ public class UserController {
      * Obtiene el perfil del usuario por su ID (HU04 — Ver perfil).
      *
      * @param id El ID del usuario a consultar.
-     * @return 202 Accepted con el {@link UserDTO} desencriptado; 404 si no existe.
+     * @return 202 Accepted con el {@link UserDTO} (email desencriptado); 404 si no existe.
      */
     @GetMapping("/{id}")
     @Operation(summary = "Ver perfil de usuario",
-               description = "Retorna los datos del perfil del usuario con datos sensibles desencriptados.")
+               description = "Retorna los datos del perfil del usuario con el email desencriptado.")
     public ResponseEntity<UserDTO> getById(@PathVariable Long id) {
         UserDTO found = userService.getById(id);
         if (found != null) {
@@ -85,8 +84,8 @@ public class UserController {
 
     /**
      * Actualiza los datos del perfil del usuario autenticado (HU05 — Editar perfil).
-     * Permite modificar nombre, equipo favorito, ciudad preferida y preferencias
-     * de notificación. No actualiza contraseña ni email por este endpoint.
+     * Permite modificar el nombre y las preferencias de notificación. No actualiza
+     * contraseña ni email por este endpoint.
      *
      * @param id      El ID del usuario a actualizar.
      * @param newData El DTO con los nuevos datos del perfil.
@@ -95,7 +94,7 @@ public class UserController {
      */
     @PutMapping("/{id}/profile")
     @Operation(summary = "Editar perfil",
-               description = "Actualiza nombre, equipo favorito, ciudad y preferencias de notificación.")
+               description = "Actualiza nombre y preferencias de notificación del usuario.")
     public ResponseEntity<?> updateProfile(@PathVariable Long id, @RequestBody UserDTO newData) {
         int status = userService.updateById(id, newData);
 
@@ -140,34 +139,10 @@ public class UserController {
     }
 
     /**
-     * Actualiza el código de verificación de un usuario.
-     * Se usa en el flujo de recuperación de contraseña.
-     *
-     * @param id   El ID del usuario.
-     * @param code El nuevo código de verificación.
-     * @return 202 Accepted si fue actualizado; 404 si no existe.
-     */
-    @PutMapping("/{id}/verificationCode")
-    @Operation(summary = "Actualizar código de verificación",
-               description = "Guarda el código de verificación para recuperación de contraseña.")
-    public ResponseEntity<?> updateVerificationCode(@PathVariable Long id, @RequestParam String code) {
-        int status = userService.updateVerificationCode(id, code);
-
-        return switch (status) {
-            case 0 -> ResponseEntity.status(HttpStatus.ACCEPTED)
-                    .body(Map.of("message", "Código actualizado exitosamente", "success", true));
-            case 2 -> ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("message", "Usuario no encontrado", "success", false));
-            default -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("message", "Error al actualizar el código", "success", false));
-        };
-    }
-
-    /**
      * Verifica si un username ya está registrado. Usado en el formulario
      * de registro para feedback en tiempo real.
      *
-     * @param username El username a verificar (sin encriptar).
+     * @param username El username a verificar (texto plano).
      * @return 202 Accepted con {@code true} si existe; 204 No Content si no existe.
      */
     @GetMapping("/exists")
@@ -189,11 +164,11 @@ public class UserController {
      * Lista todos los usuarios registrados (HU16 — Ver lista de usuarios).
      * Solo accesible para administradores.
      *
-     * @return 202 Accepted con la lista de usuarios desencriptados; 204 si está vacía.
+     * @return 202 Accepted con la lista de usuarios (email desencriptado); 204 si está vacía.
      */
     @GetMapping
     @Operation(summary = "Listar todos los usuarios",
-               description = "Solo ADMIN. Retorna todos los usuarios con datos desencriptados.")
+               description = "Solo ADMIN. Retorna todos los usuarios con email desencriptado.")
     public ResponseEntity<List<UserDTO>> getAll() {
         List<UserDTO> users = userService.getAll();
         if (users.isEmpty()) {

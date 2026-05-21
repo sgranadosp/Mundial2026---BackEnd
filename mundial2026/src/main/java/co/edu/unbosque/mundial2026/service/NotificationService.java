@@ -4,8 +4,9 @@
 package co.edu.unbosque.mundial2026.service;
 
 import java.time.LocalDateTime;
-import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -14,21 +15,36 @@ import org.springframework.stereotype.Service;
 import co.edu.unbosque.mundial2026.dto.NotificationDTO;
 import co.edu.unbosque.mundial2026.model.User;
 import co.edu.unbosque.mundial2026.repository.UserRepository;
+import co.edu.unbosque.mundial2026.util.AESUtil;
 
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 
 /**
  * Servicio de notificaciones para la plataforma Mundial 2026 Hub.
+ * <p>
  * Gestiona el envío de notificaciones por dos canales: push (Firebase Cloud
- * Messaging / FCM) y correo electrónico (SendGrid o JavaMail). Evalúa las
- * preferencias de cada usuario antes de enviar y registra evidencia de cada
- * envío en {@link AuditEventService} (qué se envió, a quién, cuándo y por qué
- * canal). Los operadores pueden además enviar notificaciones masivas segmentadas
- * por partido, ciudad o equipo.
+ * Messaging / FCM) y correo electrónico (JavaMail). Evalúa las preferencias
+ * de cada usuario antes de enviar y registra evidencia de cada envío en
+ * {@link AuditEventService}.
+ * </p>
+ * <p>
+ * <b>Segmentación por equipo o ciudad:</b> los métodos
+ * {@link #sendToTeamFollowers(String, String, String, String, Long)} y
+ * {@link #sendToCityFollowers(String, String, String, String, Long)} quedan
+ * disponibles como puntos de extensión. En el MVP actual no hay tabla de
+ * preferencias de usuario (equipo favorito / ciudad preferida), por lo que
+ * retornan 0 sin enviar. Cuando se agregue esa funcionalidad, basta con
+ * reemplazar la lógica de filtrado y mantener el resto del flujo intacto.
+ * </p>
  */
 @Service
 public class NotificationService {
+
+    /**
+     * Logger para registrar el progreso y los errores del envío.
+     */
+    private static final Logger log = LoggerFactory.getLogger(NotificationService.class);
 
     @Autowired
     private UserRepository userRepo;
@@ -86,64 +102,52 @@ public class NotificationService {
 
     /**
      * Envía una notificación masiva a todos los usuarios suscritos a un equipo
-     * específico (por {@code favoriteTeamCode}). Se usa para alertas de inicio
-     * de partido y goles.
+     * específico. Reservado para uso futuro cuando exista la tabla de
+     * preferencias de usuario (equipo favorito).
+     * <p>
+     * <b>Estado actual:</b> stub — no envía nada y retorna 0. Cuando se
+     * implemente la preferencia de equipo favorito, esta firma puede consumir
+     * un nuevo repositorio de preferencias para filtrar usuarios.
+     * </p>
      *
      * @param teamIsoCode      El código ISO del equipo (ej. "COL", "BRA").
      * @param title            Título de la notificación.
      * @param body             Cuerpo del mensaje.
      * @param notificationType Tipo de notificación para enrutamiento en el cliente.
      * @param resourceId       ID del partido o recurso asociado.
-     * @return Número de usuarios notificados.
+     * @return Número de usuarios notificados (0 en la implementación actual).
      */
     public int sendToTeamFollowers(String teamIsoCode, String title,
                                     String body, String notificationType, Long resourceId) {
-        List<User> followers = userRepo.findAll().stream()
-                .filter(u -> teamIsoCode.equals(u.getFavoriteTeamCode()))
-                .toList();
-
-        int notified = 0;
-        for (User user : followers) {
-            if (user.isPushNotificationsEnabled()) {
-                boolean ok = sendPush(user, title, body, notificationType, resourceId);
-                if (ok) {
-                    auditService.logNotificationSent(user.getId(), "PUSH", title);
-                    notified++;
-                }
-            }
-        }
-        return notified;
+        log.warn("sendToTeamFollowers invocado para equipo {} pero la preferencia"
+                + " 'equipo favorito' no está implementada en este MVP. No se envió nada.",
+                teamIsoCode);
+        return 0;
     }
 
     /**
      * Envía una notificación masiva a todos los usuarios cuya ciudad preferida
-     * coincide con la ciudad indicada. Se usa para alertas de partidos en una
-     * sede específica.
+     * coincide con la ciudad indicada. Reservado para uso futuro cuando exista
+     * la tabla de preferencias de usuario (ciudad preferida).
+     * <p>
+     * <b>Estado actual:</b> stub — no envía nada y retorna 0. Cuando se
+     * implemente la preferencia de ciudad, esta firma puede consumir un nuevo
+     * repositorio de preferencias para filtrar usuarios.
+     * </p>
      *
      * @param city             La ciudad del estadio.
      * @param title            Título de la notificación.
      * @param body             Cuerpo del mensaje.
      * @param notificationType Tipo de notificación.
      * @param resourceId       ID del recurso asociado.
-     * @return Número de usuarios notificados.
+     * @return Número de usuarios notificados (0 en la implementación actual).
      */
     public int sendToCityFollowers(String city, String title,
                                     String body, String notificationType, Long resourceId) {
-        List<User> cityUsers = userRepo.findAll().stream()
-                .filter(u -> city.equals(u.getPreferredCity()))
-                .toList();
-
-        int notified = 0;
-        for (User user : cityUsers) {
-            if (user.isPushNotificationsEnabled()) {
-                boolean ok = sendPush(user, title, body, notificationType, resourceId);
-                if (ok) {
-                    auditService.logNotificationSent(user.getId(), "PUSH", title);
-                    notified++;
-                }
-            }
-        }
-        return notified;
+        log.warn("sendToCityFollowers invocado para ciudad {} pero la preferencia"
+                + " 'ciudad preferida' no está implementada en este MVP. No se envió nada.",
+                city);
+        return 0;
     }
 
     // =========================================================================
@@ -170,16 +174,15 @@ public class NotificationService {
         //   https://fcm.googleapis.com/v1/projects/{projectId}/messages:send
         // con el token del dispositivo del usuario y el payload de la notificación.
         // Para el MVP se registra el intento y se retorna true como stub.
-        System.out.println("[FCM] Enviando push a usuario " + user.getId()
-                + " | Título: " + title
-                + " | Tipo: " + notificationType
-                + " | Recurso: " + resourceId);
+        log.info("[FCM] Enviando push a usuario {} | Título: {} | Tipo: {} | Recurso: {}",
+                user.getId(), title, notificationType, resourceId);
         return true;
     }
 
     /**
      * Envía una notificación por correo electrónico usando JavaMailSender.
-     * Mismo patrón que el {@code EmailService} del proyecto VirusDetected.
+     * El email del usuario está almacenado encriptado con AES en BD; se
+     * desencripta antes de usarlo como destinatario SMTP.
      *
      * @param user    El usuario destinatario.
      * @param subject Asunto del correo.
@@ -188,9 +191,15 @@ public class NotificationService {
      */
     private boolean sendEmail(User user, String subject, String body) {
         try {
+            String plainEmail = AESUtil.decrypt(user.getEmail());
+            if (plainEmail == null || plainEmail.isEmpty()) {
+                log.warn("No se pudo desencriptar el email del usuario {}", user.getId());
+                return false;
+            }
+
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-            helper.setTo(user.getEmail());
+            helper.setTo(plainEmail);
             helper.setSubject("[Mundial 2026 Hub] " + subject);
             helper.setFrom(FROM_EMAIL);
             helper.setText(
@@ -202,7 +211,7 @@ public class NotificationService {
             mailSender.send(message);
             return true;
         } catch (MessagingException e) {
-            e.printStackTrace();
+            log.error("Error enviando correo a usuario {}: {}", user.getId(), e.getMessage());
             return false;
         }
     }

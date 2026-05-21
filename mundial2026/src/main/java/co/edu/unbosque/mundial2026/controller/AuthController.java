@@ -14,7 +14,6 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,6 +22,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import co.edu.unbosque.mundial2026.dto.UserDTO;
+import co.edu.unbosque.mundial2026.dto.auth.LoginRequest;
+import co.edu.unbosque.mundial2026.dto.auth.RecoveryRequest;
+import co.edu.unbosque.mundial2026.dto.auth.ResetPasswordRequest;
+import co.edu.unbosque.mundial2026.dto.auth.ValidateRecoveryCodeRequest;
+import co.edu.unbosque.mundial2026.dto.auth.VerifyCodeRequest;
 import co.edu.unbosque.mundial2026.model.User;
 import co.edu.unbosque.mundial2026.security.JwtUtil;
 import co.edu.unbosque.mundial2026.service.AuditEventService;
@@ -47,11 +51,14 @@ import io.swagger.v3.oas.annotations.tags.Tag;
  *       ({@code PUT /auth/resetPassword}).</li>
  * </ul>
  * </p>
+ * <p>
+ * La política CORS para todos los endpoints se gestiona de forma centralizada
+ * en {@code SecurityConfig.corsConfigurationSource()}; no se usa
+ * {@code @CrossOrigin} a nivel de clase para evitar configuraciones duplicadas.
+ * </p>
  */
 @RestController
 @RequestMapping("/auth")
-@CrossOrigin(origins = { "http://localhost:8080", "http://localhost:8081", "http://localhost:8082",
-        "http://localhost:4200", "http://localhost:3000", "http://localhost:5173" })
 @Transactional
 @Tag(name = "Autenticación", description = "Endpoints públicos de registro, login y recuperación de contraseña")
 public class AuthController {
@@ -157,8 +164,8 @@ public class AuthController {
      * Spring Security necesita para autenticar.
      * </p>
      *
-     * @param loginRequest Mapa con las claves {@code identifier} (username o
-     *                     email en texto plano) y {@code password}.
+     * @param loginRequest El DTO con {@code identifier} (username o email) y
+     *                     {@code password} en texto plano.
      * @return 200 OK con el token JWT, el rol, el id y el correo del usuario;
      *         401 Unauthorized si las credenciales son incorrectas;
      *         400 Bad Request si faltan campos.
@@ -166,9 +173,9 @@ public class AuthController {
     @PostMapping("/login")
     @Operation(summary = "Iniciar sesión",
                description = "Autentica al usuario por username o email y retorna token JWT + rol.")
-    public ResponseEntity<?> login(@RequestBody Map<String, String> loginRequest) {
-        String identifier = loginRequest.get("identifier");
-        String password = loginRequest.get("password");
+    public ResponseEntity<?> login(@RequestBody LoginRequest loginRequest) {
+        String identifier = loginRequest.getIdentifier();
+        String password = loginRequest.getPassword();
 
         if (identifier == null || identifier.isEmpty() || password == null || password.isEmpty()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -236,7 +243,7 @@ public class AuthController {
      * registrarse. Si el código es correcto, activa la cuenta
      * ({@code enabled = true}) y consume el código.
      *
-     * @param body Mapa con las claves {@code email} y {@code codigo}.
+     * @param body DTO con email y código de verificación.
      * @return 200 OK si el código fue válido y la cuenta se activó;
      *         401 Unauthorized si el código es incorrecto;
      *         404 Not Found si no existe el correo;
@@ -245,9 +252,9 @@ public class AuthController {
     @PostMapping("/verifyCode")
     @Operation(summary = "Verificar código de registro",
                description = "Valida el código de 6 dígitos enviado al correo durante el registro y activa la cuenta.")
-    public ResponseEntity<?> verifyCode(@RequestBody Map<String, String> body) {
-        String email = body.get("email");
-        String codigo = body.get("codigo");
+    public ResponseEntity<?> verifyCode(@RequestBody VerifyCodeRequest body) {
+        String email = body.getEmail();
+        String codigo = body.getCodigo();
         if (email == null || codigo == null) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(Map.of("message", "Faltan campos: email o codigo", "success", false));
@@ -278,15 +285,15 @@ public class AuthController {
      * o no en la BD para impedir enumeración de cuentas registradas.
      * </p>
      *
-     * @param body Mapa con la clave {@code email}.
+     * @param body DTO con el email al que enviar el código.
      * @return 200 OK con mensaje genérico siempre que la solicitud esté
      *         bien formada; 400 Bad Request si falta el campo {@code email}.
      */
     @PostMapping("/requestRecoveryCode")
     @Operation(summary = "Solicitar código de recuperación de contraseña",
                description = "Envía un código de 6 dígitos al correo del usuario para iniciar el flujo de recuperación.")
-    public ResponseEntity<?> requestRecoveryCode(@RequestBody Map<String, String> body) {
-        String email = body.get("email");
+    public ResponseEntity<?> requestRecoveryCode(@RequestBody RecoveryRequest body) {
+        String email = body.getEmail();
         if (email == null || email.isEmpty()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(Map.of("message", "Falta campo: email", "success", false));
@@ -305,7 +312,7 @@ public class AuthController {
      * correo. El consumo del código ocurre en el paso 3 al actualizar la
      * contraseña.
      *
-     * @param body Mapa con las claves {@code email} y {@code codigo}.
+     * @param body DTO con email y código de recuperación.
      * @return 200 OK si el código es válido;
      *         401 Unauthorized si el código no coincide;
      *         404 Not Found si no existe el correo;
@@ -314,9 +321,9 @@ public class AuthController {
     @PostMapping("/validateRecoveryCode")
     @Operation(summary = "Validar código de recuperación (sin consumir)",
                description = "Comprueba que el código de 6 dígitos coincide con el que se envió, sin invalidarlo.")
-    public ResponseEntity<?> validateRecoveryCode(@RequestBody Map<String, String> body) {
-        String email = body.get("email");
-        String codigo = body.get("codigo");
+    public ResponseEntity<?> validateRecoveryCode(@RequestBody ValidateRecoveryCodeRequest body) {
+        String email = body.getEmail();
+        String codigo = body.getCodigo();
         if (email == null || codigo == null) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(Map.of("message", "Faltan campos: email o codigo", "success", false));
@@ -337,8 +344,7 @@ public class AuthController {
      * Paso 3: actualiza la contraseña del usuario validando una vez más el
      * código y consumiéndolo después del cambio exitoso.
      *
-     * @param body Mapa con las claves {@code email}, {@code codigo} y
-     *             {@code nuevaContrasena}.
+     * @param body DTO con email, código y nueva contraseña.
      * @return 202 Accepted si la contraseña se actualizó;
      *         401 Unauthorized si el código no coincide;
      *         404 Not Found si no existe el correo;
@@ -348,10 +354,10 @@ public class AuthController {
     @PutMapping("/resetPassword")
     @Operation(summary = "Restablecer contraseña con código de recuperación",
                description = "Valida el código y actualiza la contraseña del usuario; consume el código tras éxito.")
-    public ResponseEntity<?> resetPassword(@RequestBody Map<String, String> body) {
-        String email = body.get("email");
-        String codigo = body.get("codigo");
-        String nueva = body.get("nuevaContrasena");
+    public ResponseEntity<?> resetPassword(@RequestBody ResetPasswordRequest body) {
+        String email = body.getEmail();
+        String codigo = body.getCodigo();
+        String nueva = body.getNuevaContrasena();
         if (email == null || codigo == null || nueva == null) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(Map.of("message", "Faltan campos: email, codigo o nuevaContrasena",

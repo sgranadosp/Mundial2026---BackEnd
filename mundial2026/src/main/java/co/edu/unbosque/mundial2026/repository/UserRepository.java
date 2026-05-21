@@ -14,22 +14,31 @@ import co.edu.unbosque.mundial2026.model.User.Role;
 
 /**
  * Interfaz de repositorio para la entidad {@link User}.
- * Extiende {@link JpaRepository} para proveer operaciones CRUD estándar
- * sobre la tabla {@code users}. Los métodos personalizados permiten buscar
- * usuarios por los campos únicos usados en autenticación y en validaciones
- * de unicidad durante el registro. Todos los campos sensibles (username,
- * email, name) se almacenan encriptados con AES en la base de datos, por lo
- * que las búsquedas deben recibir el valor ya encriptado antes de consultar.
- * Spring Data JPA genera las implementaciones en tiempo de ejecución
- * a partir de la convención de nombres de los métodos.
+ * <p>
+ * Extiende {@link JpaRepository} para proveer operaciones CRUD estándar sobre
+ * la tabla {@code users}. Los métodos personalizados permiten buscar usuarios
+ * por los campos únicos usados en autenticación y en validaciones de unicidad
+ * durante el registro.
+ * </p>
+ * <p>
+ * <b>Política de cifrado en consultas:</b>
+ * <ul>
+ *   <li>{@code username} y {@code name} se almacenan en texto plano; las
+ *       búsquedas reciben el valor directamente sin encriptar.</li>
+ *   <li>{@code email} se almacena encriptado con AES; las búsquedas por email
+ *       deben recibir el valor ya encriptado.</li>
+ * </ul>
+ * </p>
+ * Spring Data JPA genera las implementaciones en tiempo de ejecución a partir
+ * de la convención de nombres de los métodos.
  */
 public interface UserRepository extends JpaRepository<User, Long> {
 
     /**
-     * Busca un usuario por su nombre de usuario (encriptado con AES).
+     * Busca un usuario por su nombre de usuario (texto plano).
      * Se usa en el proceso de autenticación JWT y en validaciones de unicidad.
      *
-     * @param username El nombre de usuario encriptado a buscar.
+     * @param username El nombre de usuario a buscar (texto plano).
      * @return Un {@link Optional} con el usuario encontrado, o vacío si no existe.
      */
     Optional<User> findByUsername(String username);
@@ -43,15 +52,6 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * @return Un {@link Optional} con el usuario encontrado, o vacío si no existe.
      */
     Optional<User> findByEmail(String email);
-
-    /**
-     * Busca un usuario por su nombre completo (encriptado con AES).
-     * Se usa en validaciones de unicidad durante el registro.
-     *
-     * @param name El nombre completo encriptado a buscar.
-     * @return Un {@link Optional} con el usuario encontrado, o vacío si no existe.
-     */
-    Optional<User> findByName(String name);
 
     /**
      * Busca todos los usuarios que tengan un rol específico.
@@ -85,11 +85,11 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByAccountNonLocked(boolean accountNonLocked);
 
     /**
-     * Comprueba si existe un usuario con el nombre de usuario dado (encriptado).
+     * Comprueba si existe un usuario con el nombre de usuario dado (texto plano).
      * Más eficiente que {@code findByUsername} cuando solo se necesita verificar
      * existencia, sin cargar el objeto completo.
      *
-     * @param username El nombre de usuario encriptado a verificar.
+     * @param username El nombre de usuario a verificar (texto plano).
      * @return {@code true} si existe al menos un usuario con ese username.
      */
     boolean existsByUsername(String username);
@@ -104,10 +104,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
     boolean existsByEmail(String email);
 
     /**
-     * Elimina un usuario por su nombre de usuario (encriptado).
+     * Elimina un usuario por su nombre de usuario (texto plano).
      * Operación disponible para administradores (HU19 — Eliminar usuario).
      *
-     * @param username El nombre de usuario encriptado del usuario a eliminar.
+     * @param username El nombre de usuario del usuario a eliminar (texto plano).
      */
     void deleteByUsername(String username);
 }

@@ -11,31 +11,45 @@ import org.modelmapper.ModelMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import co.edu.unbosque.mundial2026.dto.UserDTO;
 import co.edu.unbosque.mundial2026.model.User;
 import co.edu.unbosque.mundial2026.model.User.Role;
+import co.edu.unbosque.mundial2026.model.VerificationCode;
+import co.edu.unbosque.mundial2026.model.VerificationCode.Purpose;
 import co.edu.unbosque.mundial2026.repository.UserRepository;
+import co.edu.unbosque.mundial2026.repository.VerificationCodeRepository;
 import co.edu.unbosque.mundial2026.util.AESUtil;
 
 /**
  * Servicio encargado de la lógica de negocio relacionada con la entidad
  * {@link User} en la plataforma Mundial 2026 Hub.
+ * <p>
  * Implementa {@link CRUDOperation} para proveer operaciones estándar sobre
- * usuarios. Los datos sensibles (nombre, username, email) se encriptan con AES
- * antes de persistir y se desencriptan al leer, siguiendo el mismo patrón del
- * proyecto VirusDetected. La contraseña se codifica siempre con BCrypt.
+ * usuarios. La política de cifrado:
+ * <ul>
+ *   <li>{@code email} se encripta con AES antes de persistir.</li>
+ *   <li>{@code username} y {@code name} se almacenan en texto plano.</li>
+ *   <li>{@code password} se codifica siempre con BCrypt.</li>
+ *   <li>Los códigos de verificación / recuperación se persisten encriptados
+ *       en la tabla independiente {@link VerificationCode}, asociados al
+ *       email encriptado y a un propósito específico.</li>
+ * </ul>
+ * </p>
+ * <p>
  * Convenciones de códigos de retorno usados en este servicio:
  * <ul>
  *   <li>0 — Operación exitosa.</li>
  *   <li>1 — Dato duplicado (username o email ya en uso).</li>
  *   <li>2 — Entidad no encontrada.</li>
- *   <li>3 — Error genérico / estado inalcanzable.</li>
+ *   <li>3 — Faltan campos requeridos.</li>
  *   <li>4 — Contraseña inválida (no cumple política).</li>
  *   <li>5 — Email inválido (formato incorrecto).</li>
  *   <li>6 — Campo contiene caracteres HTML no permitidos.</li>
  *   <li>7 — Código de verificación / recuperación incorrecto.</li>
  * </ul>
+ * </p>
  */
 @Service
 public class UserService implements CRUDOperation<UserDTO, User> {
@@ -45,6 +59,12 @@ public class UserService implements CRUDOperation<UserDTO, User> {
      */
     @Autowired
     private UserRepository userRepo;
+
+    /**
+     * Repositorio JPA para códigos de verificación de un solo uso.
+     */
+    @Autowired
+    private VerificationCodeRepository codeRepo;
 
     /**
      * Mapper para conversión entre objetos DTO y entidades JPA.
@@ -76,11 +96,13 @@ public class UserService implements CRUDOperation<UserDTO, User> {
 
     /**
      * Crea un nuevo usuario en el sistema con rol {@code USER} por defecto.
-     * Encripta los campos sensibles con AES y la contraseña con BCrypt.
-     * Valida unicidad de username y email antes de persistir.
+     * Encripta el email con AES, codifica la contraseña con BCrypt, y guarda
+     * el nombre y el username en texto plano. Valida unicidad antes de persistir.
      * <p>
      * El usuario queda con {@code enabled = false} hasta que verifique
      * su cuenta con el código de 6 dígitos que se envía al correo.
+     * El código se persiste en {@link VerificationCode} con propósito
+     * {@link Purpose#REGISTRATION}.
      * </p>
      *
      * @param data El DTO con los datos del nuevo usuario.
@@ -89,6 +111,7 @@ public class UserService implements CRUDOperation<UserDTO, User> {
      *         política; 5 si el email es inválido; 6 si algún campo contiene HTML.
      */
     @Override
+    @Transactional
     public int create(UserDTO data) {
         if (data.getUsername() == null || data.getUsername().isEmpty()
                 || data.getPassword() == null || data.getPassword().isEmpty()
@@ -107,21 +130,16 @@ public class UserService implements CRUDOperation<UserDTO, User> {
             return 5;
         }
 
-        String encryptedUsername = AESUtil.encrypt(data.getUsername());
         String encryptedEmail = AESUtil.encrypt(data.getEmail());
 
-        if (userRepo.existsByUsername(encryptedUsername) || userRepo.existsByEmail(encryptedEmail)) {
+        if (userRepo.existsByUsername(data.getUsername()) || userRepo.existsByEmail(encryptedEmail)) {
             return 1;
         }
 
-        // Genera código de verificación de 6 dígitos y lo persiste encriptado.
-        String codigoPlano = EmailService.generarCodigo6Digitos();
-
-        User entity = modelMapper.map(data, User.class);
-        entity.setUsername(encryptedUsername);
-        entity.setName(AESUtil.encrypt(data.getName()));
+        User entity = new User();
+        entity.setName(data.getName());
+        entity.setUsername(data.getUsername());
         entity.setEmail(encryptedEmail);
-        entity.setVerificationCode(AESUtil.encrypt(codigoPlano));
         entity.setPassword(passwordEncoder.encode(data.getPassword()));
         entity.setRole(Role.USER);
         // El usuario no podrá hacer login hasta verificar su cuenta.
@@ -129,18 +147,21 @@ public class UserService implements CRUDOperation<UserDTO, User> {
 
         userRepo.save(entity);
 
-        // Dispara el correo. Si SMTP falla, el registro se completa igual
-        // y queda log de error; el usuario podrá pedir reenvío del código.
-        emailService.enviarCodigoVerificacion(data.getEmail(), codigoPlano);
+        // Genera código de verificación de 6 dígitos, persiste encriptado
+        // en la tabla aparte, y envía por correo.
+        String codigoPlano = EmailService.generarCodigo6Digitos();
+        issueCode(encryptedEmail, codigoPlano, Purpose.REGISTRATION);
+
+        emailService.enviarCodigoVerificacion(data.getEmail(), data.getName(), codigoPlano);
 
         return 0;
     }
 
     /**
-     * Obtiene todos los usuarios registrados con datos sensibles desencriptados.
+     * Obtiene todos los usuarios registrados con el email desencriptado.
      * La contraseña nunca se incluye en la respuesta.
      *
-     * @return Lista de {@link UserDTO} con datos desencriptados.
+     * @return Lista de {@link UserDTO} con email desencriptado.
      */
     @Override
     public List<UserDTO> getAll() {
@@ -149,32 +170,36 @@ public class UserService implements CRUDOperation<UserDTO, User> {
         entities.forEach(entity -> {
             UserDTO dto = modelMapper.map(entity, UserDTO.class);
             dto.setPassword(null);
-            decryptUserDTO(dto);
+            decryptEmail(dto);
             dtoList.add(dto);
         });
         return dtoList;
     }
 
     /**
-     * Elimina un usuario por su ID.
+     * Elimina un usuario por su ID. También limpia cualquier código de
+     * verificación pendiente asociado al email del usuario.
      *
      * @param id El ID del usuario a eliminar.
      * @return 0 si fue eliminado; 2 si no existe.
      */
     @Override
+    @Transactional
     public int deleteById(Long id) {
         Optional<User> found = userRepo.findById(id);
         if (found.isPresent()) {
-            userRepo.delete(found.get());
+            User u = found.get();
+            codeRepo.deleteByEmail(u.getEmail());
+            userRepo.delete(u);
             return 0;
         }
         return 2;
     }
 
     /**
-     * Actualiza los datos del perfil de un usuario (nombre, ciudad favorita,
-     * equipo favorito, preferencias de notificación). No actualiza contraseña
-     * ni email por este método; esos tienen métodos dedicados.
+     * Actualiza los datos básicos del perfil de un usuario (nombre y
+     * preferencias de notificación). No actualiza contraseña ni email
+     * por este método; esos tienen flujos dedicados.
      *
      * @param id      El ID del usuario a actualizar.
      * @param newData El DTO con los nuevos datos de perfil.
@@ -194,13 +219,7 @@ public class UserService implements CRUDOperation<UserDTO, User> {
         User entity = found.get();
 
         if (newData.getName() != null && !newData.getName().isEmpty()) {
-            entity.setName(AESUtil.encrypt(newData.getName()));
-        }
-        if (newData.getFavoriteTeamCode() != null) {
-            entity.setFavoriteTeamCode(newData.getFavoriteTeamCode());
-        }
-        if (newData.getPreferredCity() != null) {
-            entity.setPreferredCity(newData.getPreferredCity());
+            entity.setName(newData.getName());
         }
         entity.setPushNotificationsEnabled(newData.isPushNotificationsEnabled());
         entity.setEmailNotificationsEnabled(newData.isEmailNotificationsEnabled());
@@ -235,11 +254,10 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     // =========================================================================
 
     /**
-     * Actualiza la contraseña de un usuario verificado por su username.
-     * Se usa en el flujo de recuperación de contraseña. La nueva contraseña
+     * Actualiza la contraseña de un usuario por su username. La nueva contraseña
      * se valida y se codifica con BCrypt antes de persistir.
      *
-     * @param username    El username (sin encriptar) del usuario.
+     * @param username    El username del usuario (texto plano).
      * @param newPassword La nueva contraseña (sin codificar).
      * @return 0 si fue actualizada; 2 si el usuario no existe; 4 si la contraseña
      *         no cumple la política de seguridad.
@@ -248,7 +266,7 @@ public class UserService implements CRUDOperation<UserDTO, User> {
         if (!isValidPassword(newPassword)) {
             return 4;
         }
-        Optional<User> found = userRepo.findByUsername(AESUtil.encrypt(username));
+        Optional<User> found = userRepo.findByUsername(username);
         if (found.isEmpty()) {
             return 2;
         }
@@ -259,8 +277,8 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     }
 
     /**
-     * Actualiza el correo electrónico de un usuario por su ID.
-     * Valida formato y unicidad antes de persistir.
+     * Actualiza el correo electrónico de un usuario por su ID. Valida formato
+     * y unicidad antes de persistir.
      *
      * @param id       El ID del usuario.
      * @param newEmail El nuevo correo electrónico (sin encriptar).
@@ -286,8 +304,8 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     }
 
     /**
-     * Bloquea la cuenta de un usuario (HU17 — Bloquear usuario).
-     * Establece {@code accountNonLocked = false} y {@code enabled = false}.
+     * Bloquea la cuenta de un usuario (HU17). Establece
+     * {@code accountNonLocked = false} y {@code enabled = false}.
      *
      * @param id El ID del usuario a bloquear.
      * @return 0 si fue bloqueado; 2 si no existe.
@@ -305,8 +323,8 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     }
 
     /**
-     * Desbloquea la cuenta de un usuario (HU18 — Desbloquear usuario).
-     * Restablece {@code accountNonLocked = true} y {@code enabled = true}.
+     * Desbloquea la cuenta de un usuario (HU18). Restablece
+     * {@code accountNonLocked = true} y {@code enabled = true}.
      *
      * @param id El ID del usuario a desbloquear.
      * @return 0 si fue desbloqueado; 2 si no existe.
@@ -324,7 +342,7 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     }
 
     /**
-     * Asigna un rol específico a un usuario (HU26 — Gestionar roles).
+     * Asigna un rol específico a un usuario (HU26).
      *
      * @param id   El ID del usuario.
      * @param role El nuevo rol a asignar.
@@ -342,49 +360,29 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     }
 
     /**
-     * Actualiza el código de verificación de un usuario.
-     * Se usa en el flujo de recuperación de contraseña: se genera un código,
-     * se envía al correo del usuario y se guarda encriptado.
-     *
-     * @param id   El ID del usuario.
-     * @param code El nuevo código de verificación (sin encriptar).
-     * @return 0 si fue actualizado; 2 si no existe.
-     */
-    public int updateVerificationCode(Long id, String code) {
-        Optional<User> found = userRepo.findById(id);
-        if (found.isEmpty()) {
-            return 2;
-        }
-        User entity = found.get();
-        entity.setVerificationCode(AESUtil.encrypt(code));
-        userRepo.save(entity);
-        return 0;
-    }
-
-    /**
-     * Busca un usuario por su username y lo retorna con datos desencriptados.
+     * Busca un usuario por su username y lo retorna con el email desencriptado.
      * Se usa en el servicio de autenticación para obtener detalles del usuario
      * tras el login exitoso.
      *
-     * @param username El username sin encriptar.
-     * @return El {@link UserDTO} desencriptado, o {@code null} si no existe.
+     * @param username El username del usuario (texto plano).
+     * @return El {@link UserDTO} con email desencriptado, o {@code null} si no existe.
      */
     public UserDTO getByUsername(String username) {
-        Optional<User> found = userRepo.findByUsername(AESUtil.encrypt(username));
+        Optional<User> found = userRepo.findByUsername(username);
         if (found.isEmpty()) {
             return null;
         }
         UserDTO dto = modelMapper.map(found.get(), UserDTO.class);
         dto.setPassword(null);
-        decryptUserDTO(dto);
+        decryptEmail(dto);
         return dto;
     }
 
     /**
-     * Busca un usuario por su email y lo retorna con datos desencriptados.
-     * Se usa en el flujo de recuperación de contraseña y como fallback de login.
+     * Busca un usuario por su email (sin encriptar) y lo retorna con el email
+     * desencriptado en el DTO. Se usa en el flujo de recuperación de contraseña.
      *
-     * @param email El email sin encriptar.
+     * @param email El email del usuario (texto plano).
      * @return El {@link UserDTO} desencriptado, o {@code null} si no existe.
      */
     public UserDTO getByEmail(String email) {
@@ -394,15 +392,15 @@ public class UserService implements CRUDOperation<UserDTO, User> {
         }
         UserDTO dto = modelMapper.map(found.get(), UserDTO.class);
         dto.setPassword(null);
-        decryptUserDTO(dto);
+        decryptEmail(dto);
         return dto;
     }
 
     /**
-     * Obtiene un usuario por su ID con datos desencriptados.
+     * Obtiene un usuario por su ID con el email desencriptado.
      *
      * @param id El ID del usuario.
-     * @return El {@link UserDTO} desencriptado, o {@code null} si no existe.
+     * @return El {@link UserDTO} con email desencriptado, o {@code null} si no existe.
      */
     public UserDTO getById(Long id) {
         Optional<User> found = userRepo.findById(id);
@@ -411,39 +409,49 @@ public class UserService implements CRUDOperation<UserDTO, User> {
         }
         UserDTO dto = modelMapper.map(found.get(), UserDTO.class);
         dto.setPassword(null);
-        decryptUserDTO(dto);
+        decryptEmail(dto);
         return dto;
     }
 
     /**
-     * Verifica si existe un usuario con el username dado (sin encriptar).
+     * Verifica si existe un usuario con el username dado (texto plano).
      *
-     * @param username El username sin encriptar.
+     * @param username El username (texto plano).
      * @return {@code true} si el username ya está registrado.
      */
     public boolean usernameExists(String username) {
-        return userRepo.existsByUsername(AESUtil.encrypt(username));
+        return userRepo.existsByUsername(username);
     }
 
     /**
-     * Encripta los campos sensibles de un DTO y retorna la entidad resultante.
-     * Usado por {@code UserDetailsServiceImpl} en el flujo de autenticación.
+     * Resuelve el identificador del usuario (username o email) y retorna su
+     * username en texto plano, listo para entregar al AuthenticationManager.
+     * <p>
+     * Acepta como entrada texto plano sin saber si es un username o un email,
+     * y prueba ambos formatos contra la BD. Si alguno calza, retorna el
+     * username correspondiente.
+     * </p>
      *
-     * @param data El DTO con los datos sin encriptar.
-     * @return Entidad {@link User} con los campos sensibles encriptados.
+     * @param identifier Texto plano que puede ser username o email.
+     * @return El username del usuario si se encontró, o {@code null} si ningún
+     *         usuario coincide.
      */
-    public User encrypt(UserDTO data) {
-        User entity = modelMapper.map(data, User.class);
-        if (entity.getUsername() != null) {
-            entity.setUsername(AESUtil.encrypt(entity.getUsername()));
+    public String resolveIdentifierToEncryptedUsername(String identifier) {
+        if (identifier == null || identifier.isEmpty()) {
+            return null;
         }
-        if (entity.getName() != null) {
-            entity.setName(AESUtil.encrypt(entity.getName()));
+
+        // Probar primero como username (texto plano).
+        Optional<User> byUsername = userRepo.findByUsername(identifier);
+        if (byUsername.isPresent()) {
+            return byUsername.get().getUsername();
         }
-        if (entity.getEmail() != null) {
-            entity.setEmail(AESUtil.encrypt(entity.getEmail()));
+        // Si no calzó, probar como email (encriptado para la búsqueda).
+        Optional<User> byEmail = userRepo.findByEmail(AESUtil.encrypt(identifier));
+        if (byEmail.isPresent()) {
+            return byEmail.get().getUsername();
         }
-        return entity;
+        return null;
     }
 
     // =========================================================================
@@ -451,41 +459,9 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     // =========================================================================
 
     /**
-     * Resuelve el identificador del usuario (username o email) y retorna su
-     * username encriptado, que es lo que el AuthenticationManager necesita
-     * para autenticar.
-     * <p>
-     * Acepta como entrada texto plano sin saber si es un username o un email,
-     * encripta ambas variantes y prueba en BD. Si alguna calza, retorna el
-     * username encriptado correspondiente a ese usuario.
-     * </p>
-     *
-     * @param identifier Texto plano que puede ser username o email.
-     * @return El username encriptado del usuario si se encontró, o
-     *         {@code null} si ningún usuario coincide.
-     */
-    public String resolveIdentifierToEncryptedUsername(String identifier) {
-        if (identifier == null || identifier.isEmpty()) {
-            return null;
-        }
-        String encrypted = AESUtil.encrypt(identifier);
-
-        Optional<User> byUsername = userRepo.findByUsername(encrypted);
-        if (byUsername.isPresent()) {
-            return byUsername.get().getUsername();
-        }
-        Optional<User> byEmail = userRepo.findByEmail(encrypted);
-        if (byEmail.isPresent()) {
-            return byEmail.get().getUsername();
-        }
-        return null;
-    }
-
-    /**
      * Valida el código de verificación recibido durante el flujo de registro.
-     * Si el código coincide, activa la cuenta del usuario (enabled = true)
-     * y consume el código reemplazándolo por "0" para que no pueda usarse
-     * nuevamente.
+     * Si el código coincide, activa la cuenta del usuario y consume el código
+     * eliminándolo de la tabla {@link VerificationCode}.
      *
      * @param email  Email del usuario que se registró.
      * @param codigo Código de 6 dígitos en texto plano enviado por el usuario.
@@ -493,22 +469,19 @@ public class UserService implements CRUDOperation<UserDTO, User> {
      *         7 si el código no coincide;
      *         2 si no existe el email.
      */
+    @Transactional
     public int verifyRegistrationCode(String email, String codigo) {
-        Optional<User> found = userRepo.findByEmail(AESUtil.encrypt(email));
-        if (found.isEmpty()) {
+        String encryptedEmail = AESUtil.encrypt(email);
+        Optional<User> foundUser = userRepo.findByEmail(encryptedEmail);
+        if (foundUser.isEmpty()) {
             return 2;
         }
-        User entity = found.get();
-        String stored = entity.getVerificationCode();
-        if (stored == null) {
-            return 7;
-        }
-        String storedPlain = AESUtil.decrypt(stored);
-        if (!codigo.equals(storedPlain)) {
+        if (!checkCode(encryptedEmail, codigo, Purpose.REGISTRATION)) {
             return 7;
         }
         // Consume el código y activa la cuenta.
-        entity.setVerificationCode(AESUtil.encrypt("0"));
+        codeRepo.deleteByEmailAndPurpose(encryptedEmail, Purpose.REGISTRATION);
+        User entity = foundUser.get();
         entity.setEnabled(true);
         userRepo.save(entity);
         return 0;
@@ -517,47 +490,44 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     /**
      * Genera y envía un código de 6 dígitos al correo del usuario para
      * iniciar el flujo de recuperación de contraseña. El código se persiste
-     * encriptado en el campo {@code verificationCode} del usuario.
+     * encriptado en {@link VerificationCode} con propósito
+     * {@link Purpose#PASSWORD_RECOVERY}.
      *
      * @param email Email del usuario que solicita la recuperación.
      * @return 0 si el código se generó y envió; 2 si no existe el email.
      */
+    @Transactional
     public int requestRecoveryCode(String email) {
-        Optional<User> found = userRepo.findByEmail(AESUtil.encrypt(email));
+        String encryptedEmail = AESUtil.encrypt(email);
+        Optional<User> found = userRepo.findByEmail(encryptedEmail);
         if (found.isEmpty()) {
             return 2;
         }
         String codigoPlano = EmailService.generarCodigo6Digitos();
-        User entity = found.get();
-        entity.setVerificationCode(AESUtil.encrypt(codigoPlano));
-        userRepo.save(entity);
-
-        emailService.enviarCodigoRecuperacion(email, codigoPlano);
+        issueCode(encryptedEmail, codigoPlano, Purpose.PASSWORD_RECOVERY);
+        // Recuperamos el nombre del usuario (en texto plano) para personalizar el saludo del correo.
+        String nombrePlano = found.get().getName();
+        emailService.enviarCodigoRecuperacion(email, nombrePlano, codigoPlano);
         return 0;
     }
 
     /**
      * Valida que el código de recuperación coincida con el que está guardado
-     * para el email indicado, SIN consumirlo. Esto permite que el frontend
-     * confirme que el código es válido en un paso intermedio antes de pedir
-     * la nueva contraseña.
+     * para el email indicado, SIN consumirlo. Permite que el frontend confirme
+     * la validez del código en un paso intermedio antes de pedir la nueva
+     * contraseña.
      *
      * @param email  Email del usuario.
      * @param codigo Código de 6 dígitos que el usuario ingresó.
      * @return 0 si el código es válido; 7 si no coincide; 2 si no existe el email.
      */
     public int validateRecoveryCode(String email, String codigo) {
-        Optional<User> found = userRepo.findByEmail(AESUtil.encrypt(email));
+        String encryptedEmail = AESUtil.encrypt(email);
+        Optional<User> found = userRepo.findByEmail(encryptedEmail);
         if (found.isEmpty()) {
             return 2;
         }
-        User entity = found.get();
-        String stored = entity.getVerificationCode();
-        if (stored == null) {
-            return 7;
-        }
-        String storedPlain = AESUtil.decrypt(stored);
-        if (!codigo.equals(storedPlain)) {
+        if (!checkCode(encryptedEmail, codigo, Purpose.PASSWORD_RECOVERY)) {
             return 7;
         }
         return 0;
@@ -575,27 +545,62 @@ public class UserService implements CRUDOperation<UserDTO, User> {
      *         2 si no existe el email;
      *         4 si la nueva contraseña no cumple la política de seguridad.
      */
+    @Transactional
     public int resetPasswordWithCode(String email, String codigo, String nuevaContrasena) {
         if (!isValidPassword(nuevaContrasena)) {
             return 4;
         }
-        Optional<User> found = userRepo.findByEmail(AESUtil.encrypt(email));
+        String encryptedEmail = AESUtil.encrypt(email);
+        Optional<User> found = userRepo.findByEmail(encryptedEmail);
         if (found.isEmpty()) {
             return 2;
         }
+        if (!checkCode(encryptedEmail, codigo, Purpose.PASSWORD_RECOVERY)) {
+            return 7;
+        }
         User entity = found.get();
-        String stored = entity.getVerificationCode();
-        if (stored == null) {
-            return 7;
-        }
-        String storedPlain = AESUtil.decrypt(stored);
-        if (!codigo.equals(storedPlain)) {
-            return 7;
-        }
         entity.setPassword(passwordEncoder.encode(nuevaContrasena));
-        entity.setVerificationCode(AESUtil.encrypt("0"));
         userRepo.save(entity);
+        codeRepo.deleteByEmailAndPurpose(encryptedEmail, Purpose.PASSWORD_RECOVERY);
         return 0;
+    }
+
+    // =========================================================================
+    // Helpers privados de códigos
+    // =========================================================================
+
+    /**
+     * Emite un código nuevo para un email y propósito, eliminando primero
+     * cualquier código anterior del mismo propósito para asegurar unicidad.
+     *
+     * @param encryptedEmail Email encriptado del usuario.
+     * @param plainCode      Código de 6 dígitos en texto plano.
+     * @param purpose        Propósito del código.
+     */
+    private void issueCode(String encryptedEmail, String plainCode, Purpose purpose) {
+        codeRepo.deleteByEmailAndPurpose(encryptedEmail, purpose);
+        VerificationCode entry = new VerificationCode(
+                encryptedEmail, AESUtil.encrypt(plainCode), purpose);
+        codeRepo.save(entry);
+    }
+
+    /**
+     * Verifica si el código en texto plano coincide con el guardado para un
+     * email y propósito específico.
+     *
+     * @param encryptedEmail Email encriptado del usuario.
+     * @param plainCode      Código en texto plano a verificar.
+     * @param purpose        Propósito a comparar.
+     * @return {@code true} si el código coincide; {@code false} si no existe
+     *         o no coincide.
+     */
+    private boolean checkCode(String encryptedEmail, String plainCode, Purpose purpose) {
+        Optional<VerificationCode> stored = codeRepo.findByEmailAndPurpose(encryptedEmail, purpose);
+        if (stored.isEmpty()) {
+            return false;
+        }
+        String decrypted = AESUtil.decrypt(stored.get().getCode());
+        return plainCode.equals(decrypted);
     }
 
     // =========================================================================
@@ -646,18 +651,13 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     }
 
     /**
-     * Desencripta los campos sensibles de un {@link UserDTO} en el lugar.
-     * No desencripta la contraseña.
+     * Desencripta el campo email de un {@link UserDTO} en el lugar.
+     * No toca password (siempre nulo en respuestas) ni los demás campos
+     * que ya están en texto plano.
      *
-     * @param dto El DTO cuyos campos se van a desencriptar.
+     * @param dto El DTO cuyo email se va a desencriptar.
      */
-    private void decryptUserDTO(UserDTO dto) {
-        if (dto.getUsername() != null) {
-            dto.setUsername(AESUtil.decrypt(dto.getUsername()));
-        }
-        if (dto.getName() != null) {
-            dto.setName(AESUtil.decrypt(dto.getName()));
-        }
+    private void decryptEmail(UserDTO dto) {
         if (dto.getEmail() != null) {
             dto.setEmail(AESUtil.decrypt(dto.getEmail()));
         }

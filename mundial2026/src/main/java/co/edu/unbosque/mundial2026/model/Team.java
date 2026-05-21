@@ -65,7 +65,12 @@ public class Team {
     /**
      * Grupo de la fase de grupos al que pertenece el equipo (ej. "A", "B").
      * Puede ser nulo si el equipo ya avanzó a eliminatorias directas.
+     * <p>
+     * Se mapea a la columna {@code team_group} porque {@code GROUP} es una
+     * palabra reservada en MySQL y causaría error en la creación de la tabla.
+     * </p>
      */
+    @Column(name = "team_group")
     private String group;
  
     /**

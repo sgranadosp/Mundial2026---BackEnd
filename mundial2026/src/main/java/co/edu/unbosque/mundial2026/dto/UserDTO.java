@@ -12,10 +12,10 @@ import co.edu.unbosque.mundial2026.model.User.Role;
  * Clase de Transferencia de Datos (DTO) para representar la información
  * de un usuario en la plataforma Mundial 2026 Hub.
  * <p>
- * Se usa para transferir datos entre capas sin exponer la entidad JPA directamente.
- * En operaciones de lectura la contraseña nunca se incluye en la respuesta;
- * los campos {@code name}, {@code username} y {@code email} se deserializan
- * desencriptados desde el servicio antes de retornarlos al cliente.
+ * Se usa para transferir datos entre capas sin exponer la entidad JPA
+ * directamente. En operaciones de lectura la contraseña nunca se incluye en
+ * la respuesta; el {@code email} se deserializa desencriptado desde el servicio
+ * antes de retornarlo al cliente.
  * </p>
  */
 public class UserDTO {
@@ -47,25 +47,9 @@ public class UserDTO {
     private String email;
 
     /**
-     * Código de verificación de un solo uso para recuperación de contraseña
-     * o validación de cuenta.
-     */
-    private String verificationCode;
-
-    /**
      * Rol del usuario en el sistema (USER o ADMIN).
      */
     private Role role;
-
-    /**
-     * Código ISO del equipo favorito del usuario (ej. "COL", "BRA").
-     */
-    private String favoriteTeamCode;
-
-    /**
-     * Ciudad o sede de preferencia del usuario para agenda personalizada.
-     */
-    private String preferredCity;
 
     /**
      * Indica si las notificaciones push están activas para el usuario.
@@ -96,18 +80,16 @@ public class UserDTO {
     /**
      * Constructor con los campos básicos usados en registro e inicio de sesión.
      *
-     * @param name             Nombre completo del usuario.
-     * @param username         Nombre de usuario para autenticación.
-     * @param password         Contraseña del usuario.
-     * @param email            Correo electrónico del usuario.
-     * @param verificationCode Código de verificación inicial.
+     * @param name     Nombre completo del usuario.
+     * @param username Nombre de usuario para autenticación.
+     * @param password Contraseña del usuario.
+     * @param email    Correo electrónico del usuario.
      */
-    public UserDTO(String name, String username, String password, String email, String verificationCode) {
+    public UserDTO(String name, String username, String password, String email) {
         this.name = name;
         this.username = username;
         this.password = password;
         this.email = email;
-        this.verificationCode = verificationCode;
     }
 
     // =========================================================================
@@ -144,29 +126,11 @@ public class UserDTO {
     /** @param email El nuevo correo. */
     public void setEmail(String email) { this.email = email; }
 
-    /** @return El código de verificación. */
-    public String getVerificationCode() { return verificationCode; }
-
-    /** @param verificationCode El nuevo código de verificación. */
-    public void setVerificationCode(String verificationCode) { this.verificationCode = verificationCode; }
-
     /** @return El rol del usuario. */
     public Role getRole() { return role; }
 
     /** @param role El nuevo rol. */
     public void setRole(Role role) { this.role = role; }
-
-    /** @return El código ISO del equipo favorito. */
-    public String getFavoriteTeamCode() { return favoriteTeamCode; }
-
-    /** @param favoriteTeamCode El nuevo código ISO. */
-    public void setFavoriteTeamCode(String favoriteTeamCode) { this.favoriteTeamCode = favoriteTeamCode; }
-
-    /** @return La ciudad de preferencia. */
-    public String getPreferredCity() { return preferredCity; }
-
-    /** @param preferredCity La nueva ciudad de preferencia. */
-    public void setPreferredCity(String preferredCity) { this.preferredCity = preferredCity; }
 
     /** @return {@code true} si las notificaciones push están activas. */
     public boolean isPushNotificationsEnabled() { return pushNotificationsEnabled; }
@@ -216,9 +180,7 @@ public class UserDTO {
     @Override
     public String toString() {
         return "UserDTO [id=" + id + ", name=" + name + ", username=" + username
-                + ", email=" + email + ", role=" + role
-                + ", favoriteTeamCode=" + favoriteTeamCode
-                + ", preferredCity=" + preferredCity
+                + ", role=" + role
                 + ", accountNonLocked=" + accountNonLocked
                 + ", enabled=" + enabled + "]";
     }
