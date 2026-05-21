@@ -34,6 +34,8 @@ import co.edu.unbosque.mundial2026.util.AESUtil;
  *   <li>4 — Contraseña inválida (no cumple política).</li>
  *   <li>5 — Email inválido (formato incorrecto).</li>
  *   <li>6 — Campo contiene caracteres HTML no permitidos.</li>
+ *   <li>7 — Código de verificación / recuperación incorrecto.</li>
+ * </ul>
  */
 @Service
 public class UserService implements CRUDOperation<UserDTO, User> {
@@ -57,6 +59,12 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     private PasswordEncoder passwordEncoder;
 
     /**
+     * Servicio de envío de correos para verificación y recuperación.
+     */
+    @Autowired
+    private EmailService emailService;
+
+    /**
      * Constructor por defecto requerido por Spring.
      */
     public UserService() {
@@ -70,11 +78,15 @@ public class UserService implements CRUDOperation<UserDTO, User> {
      * Crea un nuevo usuario en el sistema con rol {@code USER} por defecto.
      * Encripta los campos sensibles con AES y la contraseña con BCrypt.
      * Valida unicidad de username y email antes de persistir.
+     * <p>
+     * El usuario queda con {@code enabled = false} hasta que verifique
+     * su cuenta con el código de 6 dígitos que se envía al correo.
+     * </p>
      *
      * @param data El DTO con los datos del nuevo usuario.
      * @return 0 si el registro fue exitoso; 1 si username o email ya existen;
-     *         4 si la contraseña no cumple la política; 5 si el email es inválido;
-     *         6 si algún campo contiene HTML.
+     *         3 si faltan campos requeridos; 4 si la contraseña no cumple la
+     *         política; 5 si el email es inválido; 6 si algún campo contiene HTML.
      */
     @Override
     public int create(UserDTO data) {
@@ -102,15 +114,25 @@ public class UserService implements CRUDOperation<UserDTO, User> {
             return 1;
         }
 
+        // Genera código de verificación de 6 dígitos y lo persiste encriptado.
+        String codigoPlano = EmailService.generarCodigo6Digitos();
+
         User entity = modelMapper.map(data, User.class);
         entity.setUsername(encryptedUsername);
         entity.setName(AESUtil.encrypt(data.getName()));
         entity.setEmail(encryptedEmail);
-        entity.setVerificationCode(AESUtil.encrypt("0"));
+        entity.setVerificationCode(AESUtil.encrypt(codigoPlano));
         entity.setPassword(passwordEncoder.encode(data.getPassword()));
         entity.setRole(Role.USER);
+        // El usuario no podrá hacer login hasta verificar su cuenta.
+        entity.setEnabled(false);
 
         userRepo.save(entity);
+
+        // Dispara el correo. Si SMTP falla, el registro se completa igual
+        // y queda log de error; el usuario podrá pedir reenvío del código.
+        emailService.enviarCodigoVerificacion(data.getEmail(), codigoPlano);
+
         return 0;
     }
 
@@ -134,8 +156,7 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     }
 
     /**
-     * Elimina un usuario por su ID. Registra el evento de auditoría
-     * en {@link AuditEventService} (inyectado en la capa de controlador).
+     * Elimina un usuario por su ID.
      *
      * @param id El ID del usuario a eliminar.
      * @return 0 si fue eliminado; 2 si no existe.
@@ -360,6 +381,24 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     }
 
     /**
+     * Busca un usuario por su email y lo retorna con datos desencriptados.
+     * Se usa en el flujo de recuperación de contraseña y como fallback de login.
+     *
+     * @param email El email sin encriptar.
+     * @return El {@link UserDTO} desencriptado, o {@code null} si no existe.
+     */
+    public UserDTO getByEmail(String email) {
+        Optional<User> found = userRepo.findByEmail(AESUtil.encrypt(email));
+        if (found.isEmpty()) {
+            return null;
+        }
+        UserDTO dto = modelMapper.map(found.get(), UserDTO.class);
+        dto.setPassword(null);
+        decryptUserDTO(dto);
+        return dto;
+    }
+
+    /**
      * Obtiene un usuario por su ID con datos desencriptados.
      *
      * @param id El ID del usuario.
@@ -405,6 +444,158 @@ public class UserService implements CRUDOperation<UserDTO, User> {
             entity.setEmail(AESUtil.encrypt(entity.getEmail()));
         }
         return entity;
+    }
+
+    // =========================================================================
+    // Verificación de cuenta y recuperación de contraseña
+    // =========================================================================
+
+    /**
+     * Resuelve el identificador del usuario (username o email) y retorna su
+     * username encriptado, que es lo que el AuthenticationManager necesita
+     * para autenticar.
+     * <p>
+     * Acepta como entrada texto plano sin saber si es un username o un email,
+     * encripta ambas variantes y prueba en BD. Si alguna calza, retorna el
+     * username encriptado correspondiente a ese usuario.
+     * </p>
+     *
+     * @param identifier Texto plano que puede ser username o email.
+     * @return El username encriptado del usuario si se encontró, o
+     *         {@code null} si ningún usuario coincide.
+     */
+    public String resolveIdentifierToEncryptedUsername(String identifier) {
+        if (identifier == null || identifier.isEmpty()) {
+            return null;
+        }
+        String encrypted = AESUtil.encrypt(identifier);
+
+        Optional<User> byUsername = userRepo.findByUsername(encrypted);
+        if (byUsername.isPresent()) {
+            return byUsername.get().getUsername();
+        }
+        Optional<User> byEmail = userRepo.findByEmail(encrypted);
+        if (byEmail.isPresent()) {
+            return byEmail.get().getUsername();
+        }
+        return null;
+    }
+
+    /**
+     * Valida el código de verificación recibido durante el flujo de registro.
+     * Si el código coincide, activa la cuenta del usuario (enabled = true)
+     * y consume el código reemplazándolo por "0" para que no pueda usarse
+     * nuevamente.
+     *
+     * @param email  Email del usuario que se registró.
+     * @param codigo Código de 6 dígitos en texto plano enviado por el usuario.
+     * @return 0 si el código es válido y la cuenta se activó;
+     *         7 si el código no coincide;
+     *         2 si no existe el email.
+     */
+    public int verifyRegistrationCode(String email, String codigo) {
+        Optional<User> found = userRepo.findByEmail(AESUtil.encrypt(email));
+        if (found.isEmpty()) {
+            return 2;
+        }
+        User entity = found.get();
+        String stored = entity.getVerificationCode();
+        if (stored == null) {
+            return 7;
+        }
+        String storedPlain = AESUtil.decrypt(stored);
+        if (!codigo.equals(storedPlain)) {
+            return 7;
+        }
+        // Consume el código y activa la cuenta.
+        entity.setVerificationCode(AESUtil.encrypt("0"));
+        entity.setEnabled(true);
+        userRepo.save(entity);
+        return 0;
+    }
+
+    /**
+     * Genera y envía un código de 6 dígitos al correo del usuario para
+     * iniciar el flujo de recuperación de contraseña. El código se persiste
+     * encriptado en el campo {@code verificationCode} del usuario.
+     *
+     * @param email Email del usuario que solicita la recuperación.
+     * @return 0 si el código se generó y envió; 2 si no existe el email.
+     */
+    public int requestRecoveryCode(String email) {
+        Optional<User> found = userRepo.findByEmail(AESUtil.encrypt(email));
+        if (found.isEmpty()) {
+            return 2;
+        }
+        String codigoPlano = EmailService.generarCodigo6Digitos();
+        User entity = found.get();
+        entity.setVerificationCode(AESUtil.encrypt(codigoPlano));
+        userRepo.save(entity);
+
+        emailService.enviarCodigoRecuperacion(email, codigoPlano);
+        return 0;
+    }
+
+    /**
+     * Valida que el código de recuperación coincida con el que está guardado
+     * para el email indicado, SIN consumirlo. Esto permite que el frontend
+     * confirme que el código es válido en un paso intermedio antes de pedir
+     * la nueva contraseña.
+     *
+     * @param email  Email del usuario.
+     * @param codigo Código de 6 dígitos que el usuario ingresó.
+     * @return 0 si el código es válido; 7 si no coincide; 2 si no existe el email.
+     */
+    public int validateRecoveryCode(String email, String codigo) {
+        Optional<User> found = userRepo.findByEmail(AESUtil.encrypt(email));
+        if (found.isEmpty()) {
+            return 2;
+        }
+        User entity = found.get();
+        String stored = entity.getVerificationCode();
+        if (stored == null) {
+            return 7;
+        }
+        String storedPlain = AESUtil.decrypt(stored);
+        if (!codigo.equals(storedPlain)) {
+            return 7;
+        }
+        return 0;
+    }
+
+    /**
+     * Completa el flujo de recuperación de contraseña: valida el código,
+     * actualiza la contraseña del usuario y consume el código.
+     *
+     * @param email           Email del usuario.
+     * @param codigo          Código de recuperación que llegó al correo.
+     * @param nuevaContrasena Nueva contraseña en texto plano.
+     * @return 0 si la contraseña se actualizó correctamente;
+     *         7 si el código no coincide;
+     *         2 si no existe el email;
+     *         4 si la nueva contraseña no cumple la política de seguridad.
+     */
+    public int resetPasswordWithCode(String email, String codigo, String nuevaContrasena) {
+        if (!isValidPassword(nuevaContrasena)) {
+            return 4;
+        }
+        Optional<User> found = userRepo.findByEmail(AESUtil.encrypt(email));
+        if (found.isEmpty()) {
+            return 2;
+        }
+        User entity = found.get();
+        String stored = entity.getVerificationCode();
+        if (stored == null) {
+            return 7;
+        }
+        String storedPlain = AESUtil.decrypt(stored);
+        if (!codigo.equals(storedPlain)) {
+            return 7;
+        }
+        entity.setPassword(passwordEncoder.encode(nuevaContrasena));
+        entity.setVerificationCode(AESUtil.encrypt("0"));
+        userRepo.save(entity);
+        return 0;
     }
 
     // =========================================================================

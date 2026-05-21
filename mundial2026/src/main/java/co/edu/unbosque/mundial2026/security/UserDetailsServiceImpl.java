@@ -17,12 +17,15 @@ import co.edu.unbosque.mundial2026.repository.UserRepository;
  * <p>
  * Spring Security llama a {@link #loadUserByUsername(String)} durante el
  * proceso de autenticación para cargar los detalles del usuario desde la base
- * de datos. En esta aplicación, el username que llega como parámetro ya viene
- * encriptado con AES (porque el token JWT almacena el username encriptado como
- * subject), por lo que se busca directamente en la BD sin encriptarlo de nuevo.
+ * de datos. En esta aplicación el "username" que llega al método puede ser
+ * realmente el <b>username</b> O el <b>email</b> del usuario (ambos encriptados
+ * con AES, ya que el {@link co.edu.unbosque.mundial2026.controller.AuthController}
+ * encripta el identificador entrante antes de delegar al
+ * {@code AuthenticationManager}).
  * </p>
  * <p>
- * La entidad {@link co.edu.unbosque.mundial2026.model.User} implementa
+ * Por eso este servicio busca primero por username; si no encuentra, busca
+ * por email. La entidad {@link co.edu.unbosque.mundial2026.model.User} implementa
  * {@link UserDetails}, por lo que puede retornarse directamente sin conversión.
  * </p>
  */
@@ -44,29 +47,30 @@ public class UserDetailsServiceImpl implements UserDetailsService {
     }
 
     /**
-     * Carga los detalles del usuario a partir de su username encriptado.
+     * Carga los detalles del usuario a partir de su identificador encriptado.
      * <p>
-     * Este método es invocado por Spring Security durante:
-     * <ul>
-     *   <li>La autenticación inicial: el {@code AuthController} encripta el
-     *       username antes de pasarlo al {@code AuthenticationManager}, que
-     *       delega aquí.</li>
-     *   <li>La validación de cada petición posterior: el
-     *       {@link JwtAuthenticationFilter} extrae el username (encriptado) del
-     *       subject del JWT y llama a este método para recargar el usuario.</li>
-     * </ul>
+     * El identificador puede ser tanto el username como el email del usuario
+     * (ambos encriptados con AES). El método:
+     * <ol>
+     *   <li>Intenta primero buscar por username.</li>
+     *   <li>Si no encuentra, intenta buscar por email.</li>
+     *   <li>Si tampoco encuentra, lanza {@link UsernameNotFoundException}.</li>
+     * </ol>
      * </p>
      *
-     * @param username El username encriptado con AES del usuario a cargar.
-     * @return El objeto {@link UserDetails} (instancia de
-     *         {@link co.edu.unbosque.mundial2026.model.User}) correspondiente.
-     * @throws UsernameNotFoundException Si no existe ningún usuario con el
-     *                                   username indicado en la base de datos.
+     * @param identifier El identificador encriptado con AES del usuario.
+     *                   Puede ser su username o su email.
+     * @return El objeto {@link UserDetails} correspondiente.
+     * @throws UsernameNotFoundException Si no existe ningún usuario con ese
+     *                                   identificador en la base de datos.
      */
     @Override
-    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        return userRepository.findByUsername(username)
-                .orElseThrow(() -> new UsernameNotFoundException(
-                        "Usuario no encontrado con username: " + username));
+    public UserDetails loadUserByUsername(String identifier) throws UsernameNotFoundException {
+        return userRepository.findByUsername(identifier)
+                .<UserDetails>map(u -> u)
+                .orElseGet(() -> userRepository.findByEmail(identifier)
+                        .<UserDetails>map(u -> u)
+                        .orElseThrow(() -> new UsernameNotFoundException(
+                                "Usuario no encontrado con identificador: " + identifier)));
     }
 }
