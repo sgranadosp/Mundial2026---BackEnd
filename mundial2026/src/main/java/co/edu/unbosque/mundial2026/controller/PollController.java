@@ -9,8 +9,10 @@ import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,40 +22,48 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import co.edu.unbosque.mundial2026.dto.CreateGroupRequest;
 import co.edu.unbosque.mundial2026.dto.PollGroupDTO;
 import co.edu.unbosque.mundial2026.dto.PredictionDTO;
 import co.edu.unbosque.mundial2026.dto.RankingDTO;
+import co.edu.unbosque.mundial2026.model.User;
 import co.edu.unbosque.mundial2026.service.PollService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 /**
- * Controlador REST para el módulo de pollas futboleras y pronósticos
- * en la plataforma Mundial 2026 Hub.
- * Gestiona el ciclo completo: creación de grupos (HU11), incorporación por
- * código de invitación, registro de pronósticos (HU11), edición antes del
- * partido (HU12), consulta del historial (HU13, HU14, HU15) y visualización
- * del ranking (HU21, HU22, HU23, HU24, HU25).
+ * Controlador REST para el módulo de pollas futboleras y pronósticos.
+ *
+ * <h3>Cambios respecto a la versión anterior</h3>
+ * <ul>
+ *   <li><b>JWT Principal</b>: ya no se reciben {@code userId}/{@code ownerId}
+ *       como parámetros. Cada endpoint extrae el ID del usuario autenticado
+ *       desde el {@link Authentication} inyectado por Spring Security
+ *       (que carga el principal en el {@code JwtAuthenticationFilter}).</li>
+ *   <li><b>POST /polls/groups</b>: ahora recibe un body JSON con {@code name}
+ *       y {@code description} (en lugar de query params).</li>
+ *   <li><b>DELETE /polls/groups/&#123;id&#125;</b>: nuevo endpoint para eliminar
+ *       grupos definitivamente (hard delete). Solo el creador puede hacerlo.</li>
+ *   <li><b>GET /polls/groups/mine</b>: reemplaza a {@code /groups/user/&#123;userId&#125;}.
+ *       Devuelve los grupos del usuario autenticado, con inviteCode visible solo
+ *       en los grupos donde es el creador.</li>
+ *   <li><b>PUT /polls/predictions/&#123;id&#125;</b>: siempre devuelve 403.
+ *       Las predicciones no son modificables (regla del proyecto).</li>
+ * </ul>
  */
 @RestController
 @RequestMapping("/polls")
 @CrossOrigin(origins = { "http://localhost:8080", "http://localhost:8081", "http://localhost:8082",
-        "http://localhost:4200", "http://localhost:3000" })
+        "http://localhost:4200", "http://localhost:3000", "http://localhost:5173" })
 @Transactional
 @Tag(name = "Pollas", description = "Grupos de predicciones, pronósticos y ranking")
 @SecurityRequirement(name = "bearerAuth")
 public class PollController {
 
-    /**
-     * Servicio de lógica de negocio de pollas y pronósticos.
-     */
     @Autowired
     private PollService pollService;
 
-    /**
-     * Constructor por defecto requerido por Spring.
-     */
     public PollController() {
     }
 
@@ -62,63 +72,102 @@ public class PollController {
     // =========================================================================
 
     /**
-     * Crea un nuevo grupo de polla para el usuario autenticado.
-     * Genera automáticamente el código de invitación único.
+     * Crea un nuevo grupo de polla. El creador es el usuario autenticado.
      *
-     * @param name    El nombre del grupo.
-     * @param ownerId El ID del usuario creador.
+     * @param body Body JSON con {@code name} y {@code description}.
+     * @param auth Principal del JWT (inyectado por Spring Security).
      * @return 201 Created con el {@link PollGroupDTO} (incluye inviteCode);
-     *         404 Not Found si el usuario no existe.
+     *         400 si el nombre está vacío; 404 si el usuario del JWT no existe.
      */
     @PostMapping("/groups")
     @Operation(summary = "Crear grupo de polla",
-               description = "Crea un grupo y genera un código de invitación único para compartir.")
-    public ResponseEntity<?> createGroup(@RequestParam String name, @RequestParam Long ownerId) {
-        PollGroupDTO group = pollService.createGroup(name, ownerId);
+               description = "Crea un grupo y genera un código de invitación único. " +
+                             "El creador es el usuario autenticado (no se envía en el body).")
+    public ResponseEntity<?> createGroup(@RequestBody CreateGroupRequest body,
+                                          Authentication auth) {
+        Long ownerId = extractUserId(auth);
+        if (ownerId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "No autenticado", "success", false));
+        }
+        if (body == null || body.getName() == null || body.getName().isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", "El nombre del grupo es obligatorio",
+                            "success", false));
+        }
+
+        PollGroupDTO group = pollService.createGroup(
+                body.getName().trim(),
+                body.getDescription(),
+                ownerId);
         if (group != null) {
             return ResponseEntity.status(HttpStatus.CREATED).body(group);
         }
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(Map.of("message", "Usuario creador no encontrado", "success", false));
+                .body(Map.of("message", "Usuario creador no encontrado",
+                        "success", false));
     }
 
     /**
-     * Une a un usuario a un grupo de polla existente usando el código de invitación.
+     * Une al usuario autenticado a un grupo de polla mediante el código de invitación.
      *
-     * @param userId     El ID del usuario que quiere unirse.
      * @param inviteCode El código de invitación del grupo.
-     * @return 202 Accepted si se unió; 409 Conflict si ya era miembro;
-     *         404 Not Found si el código o el usuario no existen.
+     * @param auth       Principal del JWT.
+     * @return 202 si se unió; 409 si ya era miembro; 404 si el código no existe;
+     *         400 si el usuario es el creador del grupo (mensaje específico).
      */
     @PostMapping("/groups/join")
     @Operation(summary = "Unirse a un grupo",
-               description = "Permite a un usuario unirse a una polla existente con el código de invitación.")
-    public ResponseEntity<?> joinGroup(@RequestParam Long userId, @RequestParam String inviteCode) {
-        int status = pollService.joinGroup(userId, inviteCode);
+               description = "Une al usuario autenticado al grupo cuyo código de invitación se proporciona.")
+    public ResponseEntity<?> joinGroup(@RequestParam String inviteCode,
+                                        Authentication auth) {
+        Long userId = extractUserId(auth);
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "No autenticado", "success", false));
+        }
+        if (inviteCode == null || inviteCode.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", "El código de invitación es obligatorio",
+                            "success", false));
+        }
+
+        int status = pollService.joinGroup(userId, inviteCode.trim());
 
         return switch (status) {
             case 0 -> ResponseEntity.status(HttpStatus.ACCEPTED)
-                    .body(Map.of("message", "Te has unido al grupo exitosamente", "success", true));
+                    .body(Map.of("message", "Te has unido al grupo exitosamente",
+                            "success", true));
             case 1 -> ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(Map.of("message", "Ya eres miembro de este grupo", "success", false));
+                    .body(Map.of("message", "Ya eres miembro de este grupo",
+                            "success", false));
             case 2 -> ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("message", "Código de invitación inválido o usuario no encontrado",
+                    .body(Map.of("message", "Código de invitación inválido",
+                            "success", false));
+            case 5 -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", "Ya eres el creador de este grupo",
                             "success", false));
             default -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("message", "Error al unirse al grupo", "success", false));
+                    .body(Map.of("message", "Error al unirse al grupo",
+                            "success", false));
         };
     }
 
     /**
-     * Lista todos los grupos activos en los que participa un usuario.
+     * Lista todos los grupos activos del usuario autenticado.
+     * El {@code inviteCode} solo se incluye en los grupos donde es el creador.
      *
-     * @param userId El ID del usuario.
-     * @return 202 Accepted con la lista de grupos; 204 si no tiene grupos.
+     * @param auth Principal del JWT.
+     * @return 202 con la lista; 204 si no tiene grupos.
      */
-    @GetMapping("/groups/user/{userId}")
-    @Operation(summary = "Grupos del usuario",
-               description = "Retorna todos los grupos activos en los que el usuario participa.")
-    public ResponseEntity<List<PollGroupDTO>> getGroupsByUser(@PathVariable Long userId) {
+    @GetMapping("/groups/mine")
+    @Operation(summary = "Mis grupos de polla",
+               description = "Lista los grupos activos del usuario autenticado.")
+    public ResponseEntity<List<PollGroupDTO>> getMyGroups(Authentication auth) {
+        Long userId = extractUserId(auth);
+        if (userId == null) {
+            return new ResponseEntity<>(HttpStatus.UNAUTHORIZED);
+        }
         List<PollGroupDTO> groups = pollService.getGroupsByUser(userId);
         if (groups.isEmpty()) {
             return new ResponseEntity<>(groups, HttpStatus.NO_CONTENT);
@@ -127,45 +176,88 @@ public class PollController {
     }
 
     /**
-     * Obtiene el detalle de un grupo por su ID.
+     * Detalle de un grupo por ID. Solo el creador ve el {@code inviteCode}.
      *
      * @param groupId El ID del grupo.
-     * @return 202 Accepted con el grupo; 404 si no existe.
+     * @param auth    Principal del JWT (para decidir si mostrar el inviteCode).
+     * @return 202 con el grupo; 404 si no existe.
      */
     @GetMapping("/groups/{groupId}")
     @Operation(summary = "Detalle de grupo",
-               description = "Retorna los datos del grupo incluyendo nombre del creador y número de miembros.")
-    public ResponseEntity<?> getGroupById(@PathVariable Long groupId) {
+               description = "Detalle del grupo. El inviteCode solo se muestra al creador.")
+    public ResponseEntity<?> getGroupById(@PathVariable Long groupId, Authentication auth) {
         PollGroupDTO group = pollService.getGroupById(groupId);
-        if (group != null) {
-            return new ResponseEntity<>(group, HttpStatus.ACCEPTED);
+        if (group == null) {
+            return new ResponseEntity<>(new PollGroupDTO(), HttpStatus.NOT_FOUND);
         }
-        return new ResponseEntity<>(new PollGroupDTO(), HttpStatus.NOT_FOUND);
+        Long userId = extractUserId(auth);
+        // Si el solicitante no es el creador, ocultamos el código.
+        if (userId == null || group.getOwnerId() == null
+                || !group.getOwnerId().equals(userId)) {
+            group.setInviteCode(null);
+        }
+        return new ResponseEntity<>(group, HttpStatus.ACCEPTED);
     }
 
     /**
-     * Desactiva un grupo de polla. Solo el creador puede hacerlo.
-     *
-     * @param groupId El ID del grupo a desactivar.
-     * @param ownerId El ID del creador que solicita la desactivación.
-     * @return 202 Accepted si fue desactivado; 404 si no existe;
-     *         403 Forbidden si el usuario no es el creador.
+     * Desactiva (soft delete) un grupo de polla. Solo el creador.
      */
     @PutMapping("/groups/{groupId}/deactivate")
-    @Operation(summary = "Desactivar grupo",
-               description = "Solo el creador puede desactivar su grupo. Los pronósticos previos se conservan.")
-    public ResponseEntity<?> deactivateGroup(@PathVariable Long groupId, @RequestParam Long ownerId) {
+    @Operation(summary = "Desactivar grupo (soft)",
+               description = "Solo el creador. Conserva el historial de pronósticos.")
+    public ResponseEntity<?> deactivateGroup(@PathVariable Long groupId,
+                                              Authentication auth) {
+        Long ownerId = extractUserId(auth);
+        if (ownerId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "No autenticado", "success", false));
+        }
         int status = pollService.deactivateGroup(groupId, ownerId);
-
         return switch (status) {
             case 0 -> ResponseEntity.status(HttpStatus.ACCEPTED)
-                    .body(Map.of("message", "Grupo desactivado exitosamente", "success", true));
+                    .body(Map.of("message", "Grupo desactivado", "success", true));
             case 2 -> ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(Map.of("message", "Grupo no encontrado", "success", false));
             case 4 -> ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("message", "Solo el creador puede desactivar el grupo", "success", false));
+                    .body(Map.of("message", "Solo el creador puede desactivar el grupo",
+                            "success", false));
             default -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("message", "Error al desactivar el grupo", "success", false));
+                    .body(Map.of("message", "Error al desactivar el grupo",
+                            "success", false));
+        };
+    }
+
+    /**
+     * Elimina completamente un grupo y todos sus pronósticos (hard delete).
+     * Solo el creador puede hacerlo.
+     *
+     * @param groupId El ID del grupo a eliminar.
+     * @param auth    Principal del JWT.
+     * @return 202 si fue eliminado; 404 si no existe; 403 si no es el creador.
+     */
+    @DeleteMapping("/groups/{groupId}")
+    @Operation(summary = "Eliminar grupo (hard delete)",
+               description = "Borra el grupo y todos sus pronósticos. Solo el creador.")
+    public ResponseEntity<?> deleteGroup(@PathVariable Long groupId,
+                                          Authentication auth) {
+        Long ownerId = extractUserId(auth);
+        if (ownerId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "No autenticado", "success", false));
+        }
+        int status = pollService.deleteGroup(groupId, ownerId);
+        return switch (status) {
+            case 0 -> ResponseEntity.status(HttpStatus.ACCEPTED)
+                    .body(Map.of("message", "Grupo eliminado exitosamente",
+                            "success", true));
+            case 2 -> ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", "Grupo no encontrado", "success", false));
+            case 4 -> ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("message", "Solo el creador puede eliminar el grupo",
+                            "success", false));
+            default -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", "Error al eliminar el grupo",
+                            "success", false));
         };
     }
 
@@ -174,79 +266,92 @@ public class PollController {
     // =========================================================================
 
     /**
-     * Registra un pronóstico de un usuario para un partido (HU11 — Realizar predicción).
-     * Solo se permite si el partido tiene estado SCHEDULED.
+     * Registra el pronóstico del usuario autenticado para un partido.
      *
-     * @param data El DTO con userId, matchId, pollGroupId y los marcadores predichos.
-     * @return 201 Created si fue registrado; 409 si ya existe un pronóstico del mismo
-     *         usuario para ese partido y grupo; 404 si alguna entidad no existe;
-     *         403 si el partido ya inició.
+     * @param data El DTO con matchId, pollGroupId y marcadores predichos.
+     *             El {@code userId} del DTO se ignora.
+     * @param auth Principal del JWT.
      */
     @PostMapping("/predictions")
     @Operation(summary = "Realizar pronóstico",
-               description = "Registra el marcador predicho para un partido. Solo válido antes del inicio.")
-    public ResponseEntity<?> submitPrediction(@RequestBody PredictionDTO data) {
-        int status = pollService.submitPrediction(data);
+               description = "Registra el pronóstico del usuario autenticado. " +
+                             "Una vez creado, NO es modificable.")
+    public ResponseEntity<?> submitPrediction(@RequestBody PredictionDTO data,
+                                               Authentication auth) {
+        Long userId = extractUserId(auth);
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "No autenticado", "success", false));
+        }
+        if (data == null
+                || data.getMatchId() == null
+                || data.getPollGroupId() == null
+                || data.getPredictedHomeScore() == null
+                || data.getPredictedAwayScore() == null) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message",
+                            "Faltan datos: matchId, pollGroupId, predictedHomeScore o predictedAwayScore",
+                            "success", false));
+        }
+        if (data.getPredictedHomeScore() < 0 || data.getPredictedAwayScore() < 0) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", "Los marcadores no pueden ser negativos",
+                            "success", false));
+        }
+
+        int status = pollService.submitPrediction(data, userId);
 
         return switch (status) {
             case 0 -> ResponseEntity.status(HttpStatus.CREATED)
-                    .body(Map.of("message", "Pronóstico registrado exitosamente", "success", true));
+                    .body(Map.of("message", "Pronóstico registrado exitosamente",
+                            "success", true));
             case 1 -> ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(Map.of("message", "Ya tienes un pronóstico para este partido en este grupo",
+                    .body(Map.of("message",
+                            "Ya tienes un pronóstico para este partido en este grupo. " +
+                            "Las predicciones no son modificables.",
                             "success", false));
             case 2 -> ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("message", "Partido, grupo o usuario no encontrado", "success", false));
+                    .body(Map.of("message",
+                            "Partido, grupo o usuario no encontrado",
+                            "success", false));
             case 4 -> ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("message", "El partido ya inició, no se aceptan más pronósticos",
+                    .body(Map.of("message",
+                            "El partido ya inició o no eres miembro del grupo",
                             "success", false));
             default -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("message", "Error al registrar el pronóstico", "success", false));
+                    .body(Map.of("message", "Error al registrar el pronóstico",
+                            "success", false));
         };
     }
 
     /**
-     * Edita un pronóstico existente (HU12 — Editar predicción).
-     * Solo se permite si el pronóstico está en estado OPEN.
-     *
-     * @param predictionId El ID del pronóstico a editar.
-     * @param userId       El ID del usuario dueño del pronóstico.
-     * @param homeScore    Nuevo marcador predicho para el equipo local.
-     * @param awayScore    Nuevo marcador predicho para el equipo visitante.
-     * @return 202 Accepted si fue editado; 404 si no existe; 403 si está bloqueado
-     *         o no pertenece al usuario.
+     * Endpoint de edición de pronóstico — SIEMPRE devuelve 403.
+     * Se conserva la ruta para responder con un mensaje claro a clientes que
+     * pudieran invocarla por accidente.
      */
     @PutMapping("/predictions/{predictionId}")
-    @Operation(summary = "Editar pronóstico",
-               description = "Modifica el marcador predicho. Solo si el partido aún no ha iniciado.")
+    @Operation(summary = "Editar pronóstico (DESHABILITADO)",
+               description = "Endpoint deshabilitado: los pronósticos no son modificables.")
     public ResponseEntity<?> editPrediction(@PathVariable Long predictionId,
-                                             @RequestParam Long userId,
-                                             @RequestParam Integer homeScore,
-                                             @RequestParam Integer awayScore) {
-        int status = pollService.editPrediction(predictionId, userId, homeScore, awayScore);
-
-        return switch (status) {
-            case 0 -> ResponseEntity.status(HttpStatus.ACCEPTED)
-                    .body(Map.of("message", "Pronóstico actualizado exitosamente", "success", true));
-            case 2 -> ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("message", "Pronóstico no encontrado", "success", false));
-            case 4 -> ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("message", "El pronóstico está bloqueado o no te pertenece", "success", false));
-            default -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("message", "Error al editar el pronóstico", "success", false));
-        };
+                                             @RequestParam(required = false) Integer homeScore,
+                                             @RequestParam(required = false) Integer awayScore) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("message",
+                        "Los pronósticos no se pueden modificar una vez registrados.",
+                        "success", false));
     }
 
     /**
-     * Lista los pronósticos realizados por un usuario en todos sus grupos
-     * (HU13 — Ver predicciones realizadas).
-     *
-     * @param userId El ID del usuario.
-     * @return 202 Accepted con la lista; 204 si no hay pronósticos.
+     * Lista los pronósticos del usuario autenticado en todos sus grupos.
      */
-    @GetMapping("/predictions/user/{userId}")
-    @Operation(summary = "Ver pronósticos del usuario",
-               description = "Retorna todos los pronósticos del usuario en todos sus grupos.")
-    public ResponseEntity<List<PredictionDTO>> getPredictionsByUser(@PathVariable Long userId) {
+    @GetMapping("/predictions/mine")
+    @Operation(summary = "Mis pronósticos",
+               description = "Lista todos los pronósticos del usuario autenticado.")
+    public ResponseEntity<List<PredictionDTO>> getMyPredictions(Authentication auth) {
+        Long userId = extractUserId(auth);
+        if (userId == null) {
+            return new ResponseEntity<>(HttpStatus.UNAUTHORIZED);
+        }
         List<PredictionDTO> predictions = pollService.getPredictionsByUser(userId);
         if (predictions.isEmpty()) {
             return new ResponseEntity<>(predictions, HttpStatus.NO_CONTENT);
@@ -255,19 +360,19 @@ public class PollController {
     }
 
     /**
-     * Lista el historial de pronósticos de un usuario en un grupo específico,
-     * incluyendo los resultados reales (HU14 — Ver historial de predicciones).
-     *
-     * @param userId      El ID del usuario.
-     * @param pollGroupId El ID del grupo.
-     * @return 202 Accepted con el historial; 204 si no hay registros.
+     * Lista los pronósticos del usuario autenticado dentro de un grupo.
      */
-    @GetMapping("/predictions/user/{userId}/group/{pollGroupId}")
-    @Operation(summary = "Historial de pronósticos en un grupo",
-               description = "Retorna pronósticos del usuario en un grupo con resultados reales evaluados.")
-    public ResponseEntity<List<PredictionDTO>> getPredictionsByUserAndGroup(
-            @PathVariable Long userId, @PathVariable Long pollGroupId) {
-        List<PredictionDTO> predictions = pollService.getPredictionsByUserAndGroup(userId, pollGroupId);
+    @GetMapping("/predictions/mine/group/{pollGroupId}")
+    @Operation(summary = "Mis pronósticos en un grupo",
+               description = "Lista los pronósticos del usuario autenticado dentro del grupo.")
+    public ResponseEntity<List<PredictionDTO>> getMyPredictionsInGroup(
+            @PathVariable Long pollGroupId, Authentication auth) {
+        Long userId = extractUserId(auth);
+        if (userId == null) {
+            return new ResponseEntity<>(HttpStatus.UNAUTHORIZED);
+        }
+        List<PredictionDTO> predictions =
+                pollService.getPredictionsByUserAndGroup(userId, pollGroupId);
         if (predictions.isEmpty()) {
             return new ResponseEntity<>(predictions, HttpStatus.NO_CONTENT);
         }
@@ -278,22 +383,38 @@ public class PollController {
     // Ranking
     // =========================================================================
 
-    /**
-     * Obtiene el ranking actualizado de un grupo de polla
-     * (HU21 — Ver ranking de usuarios, HU23 — Ver clasificación general,
-     * HU24 — Ver actualización del ranking, HU25 — Ver número de aciertos).
-     *
-     * @param groupId El ID del grupo de polla.
-     * @return 202 Accepted con el ranking ordenado por puntos; 204 si está vacío.
-     */
     @GetMapping("/groups/{groupId}/ranking")
     @Operation(summary = "Ranking del grupo",
-               description = "Retorna el ranking actualizado del grupo ordenado por puntos totales.")
+               description = "Ranking ordenado por puntos totales descendente.")
     public ResponseEntity<List<RankingDTO>> getRanking(@PathVariable Long groupId) {
         List<RankingDTO> ranking = pollService.getRankingByGroup(groupId);
         if (ranking.isEmpty()) {
             return new ResponseEntity<>(ranking, HttpStatus.NO_CONTENT);
         }
         return new ResponseEntity<>(ranking, HttpStatus.ACCEPTED);
+    }
+
+    // =========================================================================
+    // Helpers privados
+    // =========================================================================
+
+    /**
+     * Extrae el ID del usuario autenticado desde el {@link Authentication}.
+     * El JwtAuthenticationFilter pone como principal una instancia de {@link User}
+     * (que implementa UserDetails), por lo que un cast directo basta para
+     * obtener el ID.
+     *
+     * @param auth El objeto Authentication inyectado por Spring Security.
+     * @return El ID del usuario, o {@code null} si no hay sesión válida.
+     */
+    private Long extractUserId(Authentication auth) {
+        if (auth == null || auth.getPrincipal() == null) {
+            return null;
+        }
+        Object principal = auth.getPrincipal();
+        if (principal instanceof User user) {
+            return user.getId();
+        }
+        return null;
     }
 }

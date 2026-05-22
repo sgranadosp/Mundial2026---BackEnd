@@ -29,63 +29,42 @@ import co.edu.unbosque.mundial2026.repository.UserRepository;
 import co.edu.unbosque.mundial2026.util.ScoringUtil;
 
 /**
- * Servicio encargado de la lógica de negocio de pollas futboleras y pronósticos
- * en la plataforma Mundial 2026 Hub.
- * Gestiona el ciclo completo: creación de grupos, incorporación de miembros
- * por código de invitación, registro y edición de pronósticos, bloqueo
- * automático al iniciar un partido, evaluación de puntajes al terminar
- * y publicación del ranking actualizado.
+ * Servicio encargado de la lógica de negocio de pollas futboleras y pronósticos.
+ *
  * Convenciones de códigos de retorno:
  * <ul>
  *   <li>0 — Éxito.</li>
- *   <li>1 — Dato duplicado o restricción de negocio violada.</li>
+ *   <li>1 — Dato duplicado o restricción de negocio violada (ej. ya miembro,
+ *       ya tiene predicción para ese partido en ese grupo).</li>
  *   <li>2 — Entidad no encontrada.</li>
  *   <li>3 — Error genérico / datos inválidos.</li>
- *   <li>4 — Operación no permitida en el estado actual (pronóstico bloqueado).</li>
+ *   <li>4 — Operación no permitida en el estado actual (predicción bloqueada,
+ *       no es el dueño del grupo, predicción no modificable, etc.).</li>
+ *   <li>5 — Caso particular: el usuario intenta unirse a un grupo del cual
+ *       ya es el creador.</li>
  * </ul>
  */
 @Service
 public class PollService {
 
-    /**
-     * Repositorio JPA para grupos de polla.
-     */
     @Autowired
     private PollGroupRepository pollGroupRepo;
 
-    /**
-     * Repositorio JPA para pronósticos.
-     */
     @Autowired
     private PredictionRepository predictionRepo;
 
-    /**
-     * Repositorio JPA para partidos (verificar estado antes de aceptar pronósticos).
-     */
     @Autowired
     private MatchRepository matchRepo;
 
-    /**
-     * Repositorio JPA para usuarios (resolver miembros del grupo).
-     */
     @Autowired
     private UserRepository userRepo;
 
-    /**
-     * Utilidad para el cálculo de puntajes de pronósticos.
-     */
     @Autowired
     private ScoringUtil scoringUtil;
 
-    /**
-     * Mapper para conversión entre entidades y DTOs.
-     */
     @Autowired
     private ModelMapper modelMapper;
 
-    /**
-     * Constructor por defecto requerido por Spring.
-     */
     public PollService() {
     }
 
@@ -97,18 +76,23 @@ public class PollService {
      * Crea un nuevo grupo de polla. Genera un código de invitación único de
      * 8 caracteres y registra al creador como primer miembro del grupo.
      *
-     * @param name    Nombre del grupo.
-     * @param ownerId ID del usuario creador.
-     * @return El {@link PollGroupDTO} creado con el código de invitación,
+     * @param name        Nombre del grupo.
+     * @param description Descripción del grupo (puede ser null o vacío).
+     * @param ownerId     ID del usuario creador (extraído del JWT en el controller).
+     * @return El {@link PollGroupDTO} creado con inviteCode incluido,
      *         o {@code null} si el usuario no existe.
      */
-    public PollGroupDTO createGroup(String name, Long ownerId) {
+    public PollGroupDTO createGroup(String name, String description, Long ownerId) {
         Optional<User> owner = userRepo.findById(ownerId);
         if (owner.isEmpty()) {
             return null;
         }
         String inviteCode = generateUniqueInviteCode();
         PollGroup group = new PollGroup(name, owner.get(), inviteCode);
+        // La descripción es opcional. Si llega vacía o solo espacios, se guarda null.
+        if (description != null && !description.isBlank()) {
+            group.setDescription(description.trim());
+        }
         group.getMembers().add(owner.get());
         pollGroupRepo.save(group);
         return toGroupDTO(group);
@@ -119,8 +103,13 @@ public class PollService {
      *
      * @param userId     ID del usuario que quiere unirse.
      * @param inviteCode El código de invitación del grupo.
-     * @return 0 si se unió exitosamente; 1 si ya era miembro; 2 si el grupo
-     *         o usuario no existe.
+     * @return
+     *   <ul>
+     *     <li>0 — Se unió exitosamente.</li>
+     *     <li>1 — Ya era miembro del grupo.</li>
+     *     <li>2 — El grupo o el usuario no existen.</li>
+     *     <li>5 — El usuario es el CREADOR del grupo (no necesita unirse).</li>
+     *   </ul>
      */
     public int joinGroup(Long userId, String inviteCode) {
         Optional<PollGroup> group = pollGroupRepo.findByInviteCode(inviteCode);
@@ -129,33 +118,54 @@ public class PollService {
         if (group.isEmpty() || user.isEmpty()) {
             return 2;
         }
-        if (pollGroupRepo.isMemberOfGroup(group.get().getId(), userId)) {
+        PollGroup pg = group.get();
+
+        // Caso borde: el creador intenta unirse a su propio grupo.
+        // Es miembro de facto, así que devolvemos código 5 para que el front
+        // muestre "Ya eres el creador de este grupo".
+        if (pg.getOwner() != null && pg.getOwner().getId().equals(userId)) {
+            return 5;
+        }
+
+        if (pollGroupRepo.isMemberOfGroup(pg.getId(), userId)) {
             return 1;
         }
-        group.get().getMembers().add(user.get());
-        pollGroupRepo.save(group.get());
+        pg.getMembers().add(user.get());
+        pollGroupRepo.save(pg);
         return 0;
     }
 
     /**
-     * Obtiene todos los grupos activos en los que participa un usuario,
-     * tanto como creador como miembro.
+     * Obtiene todos los grupos activos en los que participa un usuario.
+     * <p>
+     * El {@code inviteCode} solo se incluye en la respuesta si el usuario es
+     * el CREADOR del grupo. Para grupos en los que es solo miembro invitado,
+     * se devuelve null para no exponer el código.
+     * </p>
      *
      * @param userId El ID del usuario.
-     * @return Lista de {@link PollGroupDTO} de los grupos del usuario.
+     * @return Lista de {@link PollGroupDTO} con el inviteCode condicionado al rol.
      */
     public List<PollGroupDTO> getGroupsByUser(Long userId) {
         List<PollGroup> groups = pollGroupRepo.findActiveGroupsByMemberId(userId);
         List<PollGroupDTO> dtoList = new ArrayList<>();
-        groups.forEach(g -> dtoList.add(toGroupDTO(g)));
+        groups.forEach(g -> {
+            PollGroupDTO dto = toGroupDTO(g);
+            // Ocultar el código si no es el creador.
+            if (g.getOwner() == null || !g.getOwner().getId().equals(userId)) {
+                dto.setInviteCode(null);
+            }
+            dtoList.add(dto);
+        });
         return dtoList;
     }
 
     /**
-     * Obtiene el detalle de un grupo por su ID.
+     * Obtiene el detalle de un grupo por su ID. No filtra el inviteCode aquí
+     * — esa decisión la toma el controller comparando con el usuario autenticado.
      *
      * @param groupId El ID del grupo.
-     * @return El {@link PollGroupDTO} del grupo, o {@code null} si no existe.
+     * @return El {@link PollGroupDTO}, o {@code null} si no existe.
      */
     public PollGroupDTO getGroupById(Long groupId) {
         Optional<PollGroup> found = pollGroupRepo.findById(groupId);
@@ -163,7 +173,8 @@ public class PollService {
     }
 
     /**
-     * Desactiva un grupo de polla. Solo el creador puede hacerlo.
+     * Desactiva un grupo de polla (soft delete). Solo el creador puede hacerlo.
+     * El grupo conserva el historial de pronósticos pero no acepta nuevos.
      *
      * @param groupId El ID del grupo.
      * @param ownerId El ID del usuario que solicita la desactivación.
@@ -183,24 +194,74 @@ public class PollService {
         return 0;
     }
 
+    /**
+     * Elimina COMPLETAMENTE un grupo de polla y sus pronósticos asociados
+     * (hard delete). Solo el creador puede hacerlo.
+     * <p>
+     * Borra primero todas las predicciones asociadas al grupo (de todos sus
+     * miembros) para no violar la integridad referencial, después limpia la
+     * tabla de unión {@code poll_group_members} y finalmente elimina el grupo.
+     * </p>
+     *
+     * @param groupId El ID del grupo a eliminar.
+     * @param ownerId El ID del usuario que solicita la eliminación.
+     * @return 0 si fue eliminado; 2 si no existe; 4 si no es el creador.
+     */
+    public int deleteGroup(Long groupId, Long ownerId) {
+        Optional<PollGroup> found = pollGroupRepo.findById(groupId);
+        if (found.isEmpty()) {
+            return 2;
+        }
+        PollGroup group = found.get();
+        if (group.getOwner() == null || !group.getOwner().getId().equals(ownerId)) {
+            return 4;
+        }
+
+        // Borrar todas las predicciones asociadas a este grupo.
+        // Iteramos sobre los miembros para limpiar sus pronósticos individuales.
+        for (User member : group.getMembers()) {
+            List<Prediction> userPredictions =
+                    predictionRepo.findByUserIdAndPollGroupId(member.getId(), groupId);
+            predictionRepo.deleteAll(userPredictions);
+        }
+
+        // Vaciar la lista de miembros (tabla de unión) antes de eliminar.
+        group.getMembers().clear();
+        pollGroupRepo.save(group);
+
+        // Eliminar el grupo definitivamente.
+        pollGroupRepo.delete(group);
+        return 0;
+    }
+
     // =========================================================================
     // Gestión de pronósticos
     // =========================================================================
 
     /**
      * Registra un pronóstico de un usuario para un partido dentro de un grupo.
-     * Solo se permite si el partido tiene estado {@code SCHEDULED}.
-     * Si ya existe un pronóstico del mismo usuario para ese partido y grupo,
-     * retorna error de duplicado.
+     * <p>
+     * Reglas de negocio:
+     * <ul>
+     *   <li>El partido debe estar en estado {@code SCHEDULED}.</li>
+     *   <li>El usuario debe ser miembro del grupo de polla.</li>
+     *   <li>NO debe existir ya un pronóstico previo del mismo usuario para
+     *       ese partido en ese grupo (la UK de la tabla lo refuerza).</li>
+     *   <li>Una vez creado, el pronóstico NO es modificable (regla del proyecto).</li>
+     * </ul>
+     * </p>
      *
-     * @param data El DTO con los datos del pronóstico.
-     * @return 0 si fue registrado; 1 si ya existe; 2 si partido, grupo o usuario
-     *         no existen; 4 si el partido ya no acepta pronósticos (LIVE o FINISHED).
+     * @param data   El DTO con matchId, pollGroupId y los marcadores predichos.
+     *               El {@code userId} del DTO se IGNORA — se usa el que llega
+     *               por parámetro (del JWT).
+     * @param userId ID del usuario autenticado (extraído del JWT por el controller).
+     * @return 0 si fue registrado; 1 si ya existe; 2 si partido/grupo/usuario
+     *         no existen; 4 si el partido ya no acepta pronósticos.
      */
-    public int submitPrediction(PredictionDTO data) {
+    public int submitPrediction(PredictionDTO data, Long userId) {
         Optional<Match> match = matchRepo.findById(data.getMatchId());
         Optional<PollGroup> group = pollGroupRepo.findById(data.getPollGroupId());
-        Optional<User> user = userRepo.findById(data.getUserId());
+        Optional<User> user = userRepo.findById(userId);
 
         if (match.isEmpty() || group.isEmpty() || user.isEmpty()) {
             return 2;
@@ -208,8 +269,12 @@ public class PollService {
         if (match.get().getStatus() != MatchStatus.SCHEDULED) {
             return 4;
         }
+        // Verificar que el usuario sea miembro del grupo.
+        if (!pollGroupRepo.isMemberOfGroup(group.get().getId(), userId)) {
+            return 4;
+        }
         Optional<Prediction> existing = predictionRepo.findByUserIdAndMatchIdAndPollGroupId(
-                data.getUserId(), data.getMatchId(), data.getPollGroupId());
+                userId, data.getMatchId(), data.getPollGroupId());
         if (existing.isPresent()) {
             return 1;
         }
@@ -223,43 +288,25 @@ public class PollService {
     }
 
     /**
-     * Edita un pronóstico existente. Solo se permite si el pronóstico tiene
-     * estado {@code OPEN} (el partido aún no ha iniciado).
+     * Edita un pronóstico existente.
+     * <p>
+     * <b>Esta operación NO es permitida</b> por regla de negocio del proyecto:
+     * los pronósticos son inmutables una vez creados. Se mantiene el método
+     * en el servicio por completitud de la API, pero siempre devuelve 4.
+     * </p>
      *
-     * @param predictionId       El ID del pronóstico a editar.
-     * @param userId             El ID del usuario dueño del pronóstico.
-     * @param newHomeScore       Nuevo marcador predicho para el equipo local.
-     * @param newAwayScore       Nuevo marcador predicho para el equipo visitante.
-     * @return 0 si fue editado; 2 si no existe; 4 si está bloqueado o no pertenece
-     *         al usuario.
+     * @param predictionId El ID del pronóstico.
+     * @param userId       El ID del usuario.
+     * @param newHomeScore Ignorado.
+     * @param newAwayScore Ignorado.
+     * @return Siempre 4 (operación no permitida).
      */
     public int editPrediction(Long predictionId, Long userId,
                                Integer newHomeScore, Integer newAwayScore) {
-        Optional<Prediction> found = predictionRepo.findById(predictionId);
-        if (found.isEmpty()) {
-            return 2;
-        }
-        Prediction prediction = found.get();
-        if (!prediction.getUser().getId().equals(userId)) {
-            return 4;
-        }
-        if (prediction.getStatus() != PredictionStatus.OPEN) {
-            return 4;
-        }
-        prediction.setPredictedHomeScore(newHomeScore);
-        prediction.setPredictedAwayScore(newAwayScore);
-        prediction.setSubmittedAt(LocalDateTime.now());
-        predictionRepo.save(prediction);
-        return 0;
+        // Las predicciones no son modificables. Siempre se rechaza la operación.
+        return 4;
     }
 
-    /**
-     * Bloquea todos los pronósticos asociados a un partido cuando este inicia
-     * (transición {@code OPEN → LOCKED}). Se llama desde el scheduler cuando
-     * el partido cambia a estado {@code LIVE}.
-     *
-     * @param matchId El ID del partido que inicia.
-     */
     public void lockPredictionsForMatch(Long matchId) {
         List<Prediction> openPredictions = predictionRepo.findByMatchIdAndStatus(matchId, PredictionStatus.OPEN);
         openPredictions.forEach(p -> {
@@ -268,16 +315,6 @@ public class PollService {
         });
     }
 
-    /**
-     * Evalúa todos los pronósticos de un partido cuando este finaliza.
-     * Calcula los puntos con {@link ScoringUtil} y transiciona el estado
-     * a {@code EVALUATED} (transición {@code LOCKED → EVALUATED}).
-     * Se llama desde el scheduler cuando el partido cambia a estado {@code FINISHED}.
-     *
-     * @param matchId      El ID del partido finalizado.
-     * @param homeScore    Goles finales del equipo local.
-     * @param awayScore    Goles finales del equipo visitante.
-     */
     public void evaluatePredictionsForMatch(Long matchId, int homeScore, int awayScore) {
         List<Prediction> locked = predictionRepo.findByMatchIdAndStatus(matchId, PredictionStatus.LOCKED);
         locked.forEach(p -> {
@@ -291,13 +328,6 @@ public class PollService {
         });
     }
 
-    /**
-     * Obtiene el historial de pronósticos de un usuario en todos sus grupos,
-     * incluyendo los resultados reales para los ya evaluados.
-     *
-     * @param userId El ID del usuario.
-     * @return Lista de {@link PredictionDTO} del usuario.
-     */
     public List<PredictionDTO> getPredictionsByUser(Long userId) {
         List<Prediction> predictions = predictionRepo.findByUserId(userId);
         List<PredictionDTO> dtoList = new ArrayList<>();
@@ -305,13 +335,6 @@ public class PollService {
         return dtoList;
     }
 
-    /**
-     * Obtiene los pronósticos de un usuario en un grupo específico.
-     *
-     * @param userId      El ID del usuario.
-     * @param pollGroupId El ID del grupo.
-     * @return Lista de {@link PredictionDTO} del usuario en el grupo.
-     */
     public List<PredictionDTO> getPredictionsByUserAndGroup(Long userId, Long pollGroupId) {
         List<Prediction> predictions = predictionRepo.findByUserIdAndPollGroupId(userId, pollGroupId);
         List<PredictionDTO> dtoList = new ArrayList<>();
@@ -323,14 +346,6 @@ public class PollService {
     // Ranking
     // =========================================================================
 
-    /**
-     * Calcula y devuelve el ranking actualizado de un grupo de polla.
-     * Ordena los miembros por puntos totales descendente y asigna posiciones.
-     *
-     * @param groupId El ID del grupo de polla.
-     * @return Lista de {@link RankingDTO} ordenada por puntos descendente,
-     *         o lista vacía si el grupo no existe.
-     */
     public List<RankingDTO> getRankingByGroup(Long groupId) {
         Optional<PollGroup> groupOpt = pollGroupRepo.findById(groupId);
         if (groupOpt.isEmpty()) {
@@ -353,7 +368,9 @@ public class PollService {
             entry.setTotalPoints(totalPoints != null ? totalPoints : 0);
             entry.setTotalPredictions(allPredictions.size());
             entry.setExactScores(exactScores != null ? exactScores : 0);
-            entry.setCorrectResults(totalPoints != null ? totalPoints - (exactScores != null ? exactScores * 2 : 0) : 0);
+            entry.setCorrectResults(totalPoints != null
+                    ? totalPoints - (exactScores != null ? exactScores * 2 : 0)
+                    : 0);
             ranking.add(entry);
         });
 
@@ -368,12 +385,6 @@ public class PollService {
     // Helpers privados
     // =========================================================================
 
-    /**
-     * Genera un código de invitación único de 8 caracteres en mayúsculas.
-     * Reintenta hasta encontrar uno que no esté ya en uso.
-     *
-     * @return Un código de invitación único.
-     */
     private String generateUniqueInviteCode() {
         String code;
         do {
@@ -382,33 +393,22 @@ public class PollService {
         return code;
     }
 
-    /**
-     * Convierte una entidad {@link PollGroup} a {@link PollGroupDTO}.
-     *
-     * @param group La entidad del grupo.
-     * @return El DTO del grupo.
-     */
     private PollGroupDTO toGroupDTO(PollGroup group) {
         PollGroupDTO dto = new PollGroupDTO();
         dto.setId(group.getId());
         dto.setName(group.getName());
         dto.setDescription(group.getDescription());
         dto.setInviteCode(group.getInviteCode());
-        dto.setOwnerId(group.getOwner().getId());
-        dto.setOwnerUsername(group.getOwner().getUsername());
+        if (group.getOwner() != null) {
+            dto.setOwnerId(group.getOwner().getId());
+            dto.setOwnerUsername(group.getOwner().getUsername());
+        }
         dto.setMembersCount(group.getMembers().size());
         dto.setCreatedAt(group.getCreatedAt());
         dto.setActive(group.isActive());
         return dto;
     }
 
-    /**
-     * Convierte una entidad {@link Prediction} a {@link PredictionDTO},
-     * incluyendo datos del partido y del resultado real si está evaluado.
-     *
-     * @param p La entidad del pronóstico.
-     * @return El DTO del pronóstico.
-     */
     private PredictionDTO toPredictionDTO(Prediction p) {
         PredictionDTO dto = new PredictionDTO();
         dto.setId(p.getId());
