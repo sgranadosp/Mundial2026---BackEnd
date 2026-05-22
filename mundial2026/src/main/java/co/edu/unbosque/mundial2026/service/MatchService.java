@@ -340,4 +340,43 @@ public class MatchService implements CRUDOperation<MatchDTO, Match> {
         }
         return dto;
     }
+    
+    /**
+     * Devuelve los partidos de fase de grupos en estado SCHEDULED, ordenados
+     * por fecha ascendente. Son los disponibles para pronosticar en pollas.
+     *
+     * @return Lista de DTOs de partidos pronosticables.
+     */
+    public List<MatchDTO> getAvailableForPolls() {
+        return matchRepo.findAll().stream()
+                .filter(m -> m.getPhase() == Match.Phase.GROUP_STAGE)
+                .filter(m -> m.getStatus() == Match.MatchStatus.SCHEDULED)
+                .sorted((a, b) -> {
+                    if (a.getScheduledAt() == null) return 1;
+                    if (b.getScheduledAt() == null) return -1;
+                    return a.getScheduledAt().compareTo(b.getScheduledAt());
+                })
+                .map(this::toDTO)
+                .toList();
+    }
+
+    /**
+     * Devuelve los partidos de fase de grupos que aún no han iniciado, ordenados
+     * por fecha ascendente. Son los disponibles para compra de tickets.
+     *
+     * @return Lista de DTOs de partidos para tickets.
+     */
+    public List<MatchDTO> getAvailableForTickets() {
+        return matchRepo.findAll().stream()
+                .filter(m -> m.getPhase() == Match.Phase.GROUP_STAGE)
+                .filter(m -> m.getStatus() == Match.MatchStatus.SCHEDULED
+                          || m.getStatus() == Match.MatchStatus.LIVE)
+                .sorted((a, b) -> {
+                    if (a.getScheduledAt() == null) return 1;
+                    if (b.getScheduledAt() == null) return -1;
+                    return a.getScheduledAt().compareTo(b.getScheduledAt());
+                })
+                .map(this::toDTO)
+                .toList();
+    }
 }

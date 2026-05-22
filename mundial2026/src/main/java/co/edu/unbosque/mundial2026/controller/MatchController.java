@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import co.edu.unbosque.mundial2026.dto.MatchDTO;
+import co.edu.unbosque.mundial2026.model.Match;
 import co.edu.unbosque.mundial2026.model.Match.MatchStatus;
 import co.edu.unbosque.mundial2026.model.Match.Phase;
 import co.edu.unbosque.mundial2026.service.ExternalMatchService;
@@ -74,6 +76,7 @@ public class MatchController {
     @GetMapping
     @Operation(summary = "Listar todos los partidos",
                description = "Retorna todos los partidos con datos de equipos y estadio aplanados.")
+    @Transactional(readOnly = true)
     public ResponseEntity<List<MatchDTO>> getAll() {
         List<MatchDTO> matches = matchService.getAll();
         if (matches.isEmpty()) {
@@ -91,6 +94,7 @@ public class MatchController {
     @GetMapping("/{id}")
     @Operation(summary = "Ver detalle de partido",
                description = "Retorna información completa de un partido: equipos, estadio, marcador y estado.")
+    @Transactional(readOnly = true)
     public ResponseEntity<MatchDTO> getById(@PathVariable Long id) {
         MatchDTO match = matchService.getById(id);
         if (match != null) {
@@ -110,6 +114,7 @@ public class MatchController {
     @GetMapping("/status/{status}")
     @Operation(summary = "Filtrar partidos por estado",
                description = "Filtra por SCHEDULED (programados), LIVE (en juego) o FINISHED (finalizados).")
+    @Transactional(readOnly = true)
     public ResponseEntity<List<MatchDTO>> getByStatus(@PathVariable MatchStatus status) {
         List<MatchDTO> matches = matchService.getByStatus(status);
         if (matches.isEmpty()) {
@@ -128,6 +133,7 @@ public class MatchController {
     @GetMapping("/byDate")
     @Operation(summary = "Filtrar partidos por fecha",
                description = "Retorna partidos programados dentro del rango de fechas indicado (UTC).")
+    @Transactional(readOnly = true)
     public ResponseEntity<List<MatchDTO>> getByDateRange(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime start,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime end) {
@@ -147,6 +153,7 @@ public class MatchController {
     @GetMapping("/phase/{phase}")
     @Operation(summary = "Filtrar partidos por fase",
                description = "Retorna todos los partidos de la fase del torneo indicada.")
+    @Transactional(readOnly = true)
     public ResponseEntity<List<MatchDTO>> getByPhase(@PathVariable Phase phase) {
         List<MatchDTO> matches = matchService.getByPhase(phase);
         if (matches.isEmpty()) {
@@ -165,6 +172,7 @@ public class MatchController {
     @GetMapping("/team/{teamId}")
     @Operation(summary = "Partidos de un equipo",
                description = "Retorna todos los partidos en los que participa el equipo indicado.")
+    @Transactional(readOnly = true)
     public ResponseEntity<List<MatchDTO>> getByTeam(@PathVariable Long teamId) {
         List<MatchDTO> matches = matchService.getByTeam(teamId);
         if (matches.isEmpty()) {
@@ -182,6 +190,7 @@ public class MatchController {
     @GetMapping("/stadium/{stadiumId}")
     @Operation(summary = "Partidos de un estadio",
                description = "Retorna todos los partidos programados en el estadio indicado.")
+    @Transactional(readOnly = true)
     public ResponseEntity<List<MatchDTO>> getByStadium(@PathVariable Long stadiumId) {
         List<MatchDTO> matches = matchService.getByStadium(stadiumId);
         if (matches.isEmpty()) {
@@ -203,6 +212,7 @@ public class MatchController {
     @PostMapping("/admin/sync")
     @Operation(summary = "Sincronizar partidos desde API externa",
                description = "Solo ADMIN. Importa o actualiza todos los partidos desde la fuente de datos.")
+    @Transactional(readOnly = true)
     public ResponseEntity<?> syncFromExternalApi() {
         int synced = externalMatchService.syncAllMatches();
         if (synced >= 0) {
@@ -226,6 +236,7 @@ public class MatchController {
     @PutMapping("/admin/{id}/result")
     @Operation(summary = "Actualizar resultado de partido",
                description = "Solo ADMIN. Actualiza marcador y estado de un partido manualmente.")
+    @Transactional(readOnly = true)
     public ResponseEntity<?> updateResult(@PathVariable Long id,
                                           @RequestParam MatchStatus status,
                                           @RequestParam(required = false) Integer homeScore,
@@ -256,6 +267,7 @@ public class MatchController {
     @GetMapping("/count")
     @Operation(summary = "Contar partidos",
                description = "Retorna el número total de partidos registrados.")
+    @Transactional(readOnly = true)
     public ResponseEntity<Long> countAll() {
         long count = matchService.count();
         if (count == 0) {
@@ -263,4 +275,33 @@ public class MatchController {
         }
         return new ResponseEntity<>(count, HttpStatus.ACCEPTED);
     }
+    
+
+    /**
+     * Devuelve los partidos de fase de grupos disponibles para pronosticar:
+     * estado SCHEDULED, fecha futura.
+     *
+     * @return 200 OK con la lista de partidos pronosticables.
+     */
+    @GetMapping("/available-for-polls")
+    @Operation(summary = "Partidos disponibles para pronóstico",
+               description = "Lista los partidos de fase de grupos en estado SCHEDULED.")
+    @Transactional(readOnly = true)
+    public ResponseEntity<List<MatchDTO>> availableForPolls() {
+        return ResponseEntity.ok(matchService.getAvailableForPolls());
+    }
+ 
+    /**
+     * Devuelve los partidos de fase de grupos disponibles para compra de tickets.
+     *
+     * @return 200 OK con la lista de partidos.
+     */
+    @GetMapping("/available-for-tickets")
+    @Operation(summary = "Partidos disponibles para compra de tickets",
+               description = "Lista los partidos de fase de grupos que aún no han iniciado.")
+    @Transactional(readOnly = true)
+    public ResponseEntity<List<MatchDTO>> availableForTickets() {
+        return ResponseEntity.ok(matchService.getAvailableForTickets());
+    }
+ 
 }

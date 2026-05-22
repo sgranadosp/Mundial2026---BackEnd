@@ -93,6 +93,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
 
         final String authorizationHeader = request.getHeader("Authorization");
+        
+        logger.warn("=== DEBUG === Path: " + request.getRequestURI() 
+        + " | Auth header: " + (authorizationHeader == null ? "NULL" : "présent ("+authorizationHeader.length()+" chars)"));
 
         String username = null;
         String jwt = null;
