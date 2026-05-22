@@ -1,217 +1,153 @@
-/**
- * Paquete que contiene las clases de entidad (modelo) utilizadas
- * en la aplicación Mundial 2026 Hub.
- */
 package co.edu.unbosque.mundial2026.model;
 
 import java.util.Objects;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.JoinColumn;
-import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 
 /**
- * Entidad JPA que representa una lámina digital (sticker) dentro del álbum
- * de un usuario en la plataforma Mundial 2026 Hub.
+ * Entidad JPA que representa una lámina del catálogo maestro del álbum
+ * Mundial 2026 Hub.
  * <p>
- * Cada lámina tiene metadatos (categoría, rareza, equipo o estadio asociado)
- * y un estado que indica si está pegada en el álbum o disponible para intercambio.
- * No se usan imágenes de personas reales; se usan avatares y gráficos temáticos
- * (restricción de negocio del proyecto).
+ * El catálogo está formado por 294 láminas: 6 láminas por cada una de las
+ * 48 selecciones nacionales clasificadas al Mundial (288 láminas) más una
+ * página final de 6 láminas especiales (294 en total). Esta tabla es
+ * fija y es la misma para todos los usuarios; lo que cambia por usuario es
+ * cuáles posee, lo cual vive en {@link UserSticker}.
+ * </p>
+ * <p>
+ * Cada lámina se identifica por un código único en formato
+ * {@code <country_code>_NN} (por ejemplo {@code argentina_01},
+ * {@code especial_06}), que también corresponde al nombre del archivo PNG
+ * servido desde {@code /api/laminas/{code}.png}. 
  * </p>
  */
 @Entity
-@Table(name = "stickers")
+@Table(name = "stickers",
+       indexes = { @Index(name = "idx_sticker_country", columnList = "country_code") })
 public class Sticker {
 
     /**
-     * Identificador único de la lámina en el álbum del usuario,
-     * generado por la base de datos.
+     * Identificador único interno de la lámina.
      */
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     /**
-     * Álbum al que pertenece esta lámina.
+     * Código único de la lámina con formato {@code <country_code>_NN}.
+     * Coincide con el nombre del archivo PNG (sin extensión).
      */
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "album_id")
-    private Album album;
+    @Column(nullable = false, unique = true, length = 50)
+    private String code;
 
     /**
-     * Código único de la lámina en el catálogo del álbum oficial (ej. "COL-01", "EST-05").
-     * Dos láminas del mismo usuario con el mismo {@code stickerCode} son repetidas.
+     * Código de la selección a la que pertenece la lámina, en formato
+     * ASCII minúsculas con guiones bajos (ej. {@code argentina},
+     * {@code arabia_saudi}, {@code especial}).
      */
-    private String stickerCode;
+    @Column(name = "country_code", nullable = false, length = 30)
+    private String countryCode;
 
     /**
-     * Nombre descriptivo de la lámina (ej. "Estadio MetLife", "Avatar Colombia").
+     * Nombre de la selección listo para mostrar al usuario, con tildes y
+     * caracteres especiales (ej. "Argentina", "España", "Especiales").
      */
-    private String displayName;
+    @Column(name = "country_name", nullable = false, length = 50)
+    private String countryName;
 
     /**
-     * Categoría temática de la lámina, definida mediante el enum {@link StickerCategory}.
+     * Posición de la lámina dentro de la página de su selección (1 a 6).
+     */
+    @Column(nullable = false)
+    private int position;
+
+    /**
+     * Tipo de la lámina: escudo de la selección, jugador, o lámina especial.
      */
     @Enumerated(EnumType.STRING)
-    private StickerCategory category;
+    @Column(nullable = false, length = 20)
+    private StickerType type;
 
     /**
-     * Rareza de la lámina, que determina su probabilidad de aparición en paquetes.
-     * Las láminas más raras tienen mayor valor en intercambios.
+     * Tipos posibles de lámina en el álbum.
      */
-    @Enumerated(EnumType.STRING)
-    private StickerRarity rarity;
-
-    /**
-     * Estado de la lámina en el álbum, definido mediante el enum {@link StickerStatus}.
-     */
-    @Enumerated(EnumType.STRING)
-    private StickerStatus status;
-
-    /**
-     * URL del avatar o gráfico temático de la lámina.
-     * No contiene imágenes de personas reales (restricción del proyecto).
-     */
-    private String imageUrl;
-
-    /**
-     * Código ISO del equipo relacionado con la lámina, si aplica.
-     * Puede ser nulo para láminas de estadios u otras categorías.
-     */
-    private String teamIsoCode;
-
-    /**
-     * Constructor por defecto requerido por JPA.
-     * Inicializa la lámina como pegada en el álbum.
-     */
-    public Sticker() {
-        this.status = StickerStatus.PLACED;
-    }
-
-    /**
-     * Constructor con los datos principales de la lámina.
-     *
-     * @param album       Álbum propietario de la lámina.
-     * @param stickerCode Código único de la lámina en el catálogo.
-     * @param displayName Nombre descriptivo de la lámina.
-     * @param category    Categoría temática.
-     * @param rarity      Rareza de la lámina.
-     */
-    public Sticker(Album album, String stickerCode, String displayName,
-                   StickerCategory category, StickerRarity rarity) {
-        this();
-        this.album = album;
-        this.stickerCode = stickerCode;
-        this.displayName = displayName;
-        this.category = category;
-        this.rarity = rarity;
-    }
-
-    /**
-     * Enumeración que define las categorías temáticas de las láminas del álbum.
-     */
-    public enum StickerCategory {
-        /** Láminas de selecciones nacionales (avatar del equipo). */
-        NATIONAL_TEAM,
-        /** Láminas de estadios sede del Mundial. */
-        STADIUM,
-        /** Láminas de trofeos o momentos icónicos. */
-        TROPHY,
-        /** Láminas especiales o de edición limitada. */
+    public enum StickerType {
+        /** Escudo o bandera de la selección (típicamente la primera de la página). */
+        CREST,
+        /** Lámina de un jugador de la selección. */
+        PLAYER,
+        /** Lámina especial (página final de 6 láminas comunes a todos). */
         SPECIAL
     }
 
-    /**
-     * Enumeración que define la rareza de una lámina y su probabilidad de aparición.
-     */
-    public enum StickerRarity {
-        /** Lámina común, aparece frecuentemente en paquetes. */
-        COMMON,
-        /** Lámina poco común. */
-        UNCOMMON,
-        /** Lámina rara, baja probabilidad de aparición. */
-        RARE,
-        /** Lámina legendaria, muy baja probabilidad de aparición. */
-        LEGENDARY
+    /** Constructor por defecto requerido por JPA. */
+    public Sticker() {
     }
 
     /**
-     * Enumeración que define el estado de una lámina dentro del álbum del usuario.
+     * Constructor con todos los campos funcionales.
+     *
+     * @param code        Código único {@code <country>_NN}.
+     * @param countryCode Código de la selección en ASCII.
+     * @param countryName Nombre de la selección listo para mostrar.
+     * @param position    Posición de la lámina (1 a 6).
+     * @param type        Tipo de la lámina.
      */
-    public enum StickerStatus {
-        /** La lámina está pegada en el álbum (es única para el usuario). */
-        PLACED,
-        /** La lámina es una repetida y está disponible para intercambio. */
-        DUPLICATE,
-        /** La lámina está en proceso de intercambio (bloqueada temporalmente). */
-        IN_EXCHANGE
+    public Sticker(String code, String countryCode, String countryName, int position, StickerType type) {
+        this.code = code;
+        this.countryCode = countryCode;
+        this.countryName = countryName;
+        this.position = position;
+        this.type = type;
     }
 
     // =========================================================================
     // Getters y Setters
     // =========================================================================
 
-    /** @return El ID de la lámina. */
+    /** @return El ID interno. */
     public Long getId() { return id; }
 
-    /** @param id El nuevo ID de la lámina. */
+    /** @param id El nuevo ID. */
     public void setId(Long id) { this.id = id; }
 
-    /** @return El álbum propietario de la lámina. */
-    public Album getAlbum() { return album; }
+    /** @return El código único de la lámina. */
+    public String getCode() { return code; }
 
-    /** @param album El nuevo álbum propietario. */
-    public void setAlbum(Album album) { this.album = album; }
+    /** @param code El nuevo código. */
+    public void setCode(String code) { this.code = code; }
 
-    /** @return El código único de la lámina en el catálogo. */
-    public String getStickerCode() { return stickerCode; }
+    /** @return El código ASCII de la selección. */
+    public String getCountryCode() { return countryCode; }
 
-    /** @param stickerCode El nuevo código de lámina. */
-    public void setStickerCode(String stickerCode) { this.stickerCode = stickerCode; }
+    /** @param countryCode El nuevo código de selección. */
+    public void setCountryCode(String countryCode) { this.countryCode = countryCode; }
 
-    /** @return El nombre descriptivo de la lámina. */
-    public String getDisplayName() { return displayName; }
+    /** @return El nombre de la selección para mostrar. */
+    public String getCountryName() { return countryName; }
 
-    /** @param displayName El nuevo nombre descriptivo. */
-    public void setDisplayName(String displayName) { this.displayName = displayName; }
+    /** @param countryName El nuevo nombre de selección. */
+    public void setCountryName(String countryName) { this.countryName = countryName; }
 
-    /** @return La categoría temática de la lámina. */
-    public StickerCategory getCategory() { return category; }
+    /** @return La posición de la lámina en su página. */
+    public int getPosition() { return position; }
 
-    /** @param category La nueva categoría. */
-    public void setCategory(StickerCategory category) { this.category = category; }
+    /** @param position La nueva posición. */
+    public void setPosition(int position) { this.position = position; }
 
-    /** @return La rareza de la lámina. */
-    public StickerRarity getRarity() { return rarity; }
+    /** @return El tipo de lámina. */
+    public StickerType getType() { return type; }
 
-    /** @param rarity La nueva rareza. */
-    public void setRarity(StickerRarity rarity) { this.rarity = rarity; }
-
-    /** @return El estado actual de la lámina. */
-    public StickerStatus getStatus() { return status; }
-
-    /** @param status El nuevo estado de la lámina. */
-    public void setStatus(StickerStatus status) { this.status = status; }
-
-    /** @return La URL del avatar o gráfico de la lámina. */
-    public String getImageUrl() { return imageUrl; }
-
-    /** @param imageUrl La nueva URL de imagen. */
-    public void setImageUrl(String imageUrl) { this.imageUrl = imageUrl; }
-
-    /** @return El código ISO del equipo relacionado con la lámina. */
-    public String getTeamIsoCode() { return teamIsoCode; }
-
-    /** @param teamIsoCode El nuevo código ISO del equipo. */
-    public void setTeamIsoCode(String teamIsoCode) { this.teamIsoCode = teamIsoCode; }
+    /** @param type El nuevo tipo. */
+    public void setType(StickerType type) { this.type = type; }
 
     // =========================================================================
     // equals, hashCode, toString
@@ -222,16 +158,15 @@ public class Sticker {
         if (this == obj) return true;
         if (obj == null || getClass() != obj.getClass()) return false;
         Sticker other = (Sticker) obj;
-        return Objects.equals(id, other.id);
+        return Objects.equals(id, other.id) && Objects.equals(code, other.code);
     }
 
     @Override
-    public int hashCode() { return Objects.hash(id); }
+    public int hashCode() { return Objects.hash(id, code); }
 
     @Override
     public String toString() {
-        return "Sticker [id=" + id + ", stickerCode=" + stickerCode
-                + ", displayName=" + displayName + ", category=" + category
-                + ", rarity=" + rarity + ", status=" + status + "]";
+        return "Sticker [id=" + id + ", code=" + code + ", countryName=" + countryName
+                + ", position=" + position + ", type=" + type + "]";
     }
 }

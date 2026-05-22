@@ -49,7 +49,7 @@ public class SecurityConfig {
 
     /**
      * Filtro de autenticación JWT encargado de interceptar cada solicitud HTTP
-     * y validar el token de autenticación.
+     * y validar el token de autenticación. 
      */
     private final JwtAuthenticationFilter jwtAuthFilter;
 
@@ -100,6 +100,11 @@ public class SecurityConfig {
                         "/swagger-ui/**",
                         "/swagger-ui.html",
                         "/v3/api-docs/**").permitAll();
+                // Imágenes de láminas del álbum: públicas para que el navegador
+                // pueda mostrarlas en <img src=""> sin manejar JWT en cada request.
+                // El servidor solo expone los archivos PNG que cualquier usuario
+                // ya posee saberlo viene controlado en /album/** que sí requiere JWT.
+                auth.requestMatchers("/laminas/**").permitAll();
 
                 // Rutas accesibles por USER y ADMIN
                 auth.requestMatchers(
@@ -216,7 +221,7 @@ public class SecurityConfig {
      *
      * @param config configuración de autenticación
      * @return gestor de autenticación
-     * @throws Exception en caso de error
+     * @throws Exception en caso de error 
      */
     @Bean
     public AuthenticationManager authenticationManager(

@@ -1,87 +1,50 @@
 /**
- * Paquete que contiene las interfaces de repositorio utilizadas
- * en la aplicación Mundial 2026 Hub.
+ * Paquete que contiene las interfaces de repositorio de la aplicación
+ * Mundial 2026 Hub.
  */
 package co.edu.unbosque.mundial2026.repository;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import co.edu.unbosque.mundial2026.model.Sticker;
-import co.edu.unbosque.mundial2026.model.Sticker.StickerCategory;
-import co.edu.unbosque.mundial2026.model.Sticker.StickerRarity;
-import co.edu.unbosque.mundial2026.model.Sticker.StickerStatus;
 
 /**
- * Interfaz de repositorio para la entidad {@link Sticker}.
- * Extiende {@link JpaRepository} para proveer operaciones CRUD estándar sobre
- * la tabla {@code stickers}. Los métodos personalizados permiten listar láminas
- * por álbum con distintos filtros (estado, categoría, rareza) para los flujos
- * de visualización del álbum, y detectar repetidas disponibles para intercambio.
+ * Repositorio JPA para la entidad {@link Sticker} (catálogo maestro de láminas).
+ * <p>
+ * Todas las consultas operan sobre el catálogo completo de 294 láminas, que
+ * es información estática igual para todos los usuarios. La información
+ * personal de qué láminas posee cada usuario vive en
+ * {@code UserStickerRepository}.
+ * </p>
  */
 public interface StickerRepository extends JpaRepository<Sticker, Long> {
 
     /**
-     * Obtiene todas las láminas de un álbum específico.
-     * Se usa para mostrar el contenido completo del álbum del usuario.
+     * Busca una lámina por su código único.
      *
-     * @param albumId El ID del álbum.
-     * @return Lista de todas las láminas del álbum.
+     * @param code Código de la lámina (ej. {@code argentina_01}).
+     * @return Un {@link Optional} con la lámina si existe.
      */
-    List<Sticker> findByAlbumId(Long albumId);
+    Optional<Sticker> findByCode(String code);
 
     /**
-     * Obtiene las láminas de un álbum con un estado específico.
-     * El uso principal es buscar láminas con estado {@code DUPLICATE} para
-     * mostrar las repetidas disponibles para intercambio.
+     * Devuelve todas las láminas de una selección específica, ordenadas
+     * por posición ascendente. 
      *
-     * @param albumId El ID del álbum.
-     * @param status  El estado de la lámina (PLACED, DUPLICATE o IN_EXCHANGE).
-     * @return Lista de láminas del álbum con el estado indicado.
+     * @param countryCode Código ASCII de la selección (ej. {@code colombia}).
+     * @return Lista de las 6 láminas de la selección, en orden 1 a 6.
      */
-    List<Sticker> findByAlbumIdAndStatus(Long albumId, StickerStatus status);
+    List<Sticker> findByCountryCodeOrderByPositionAsc(String countryCode);
 
     /**
-     * Obtiene las láminas de un álbum filtradas por categoría temática.
-     * Se usa para mostrar secciones del álbum por tipo (selecciones,
-     * estadios, trofeos, especiales).
+     * Verifica si ya existe al menos una lámina en el catálogo.
+     * Útil para decidir en el arranque si hay que precargar las 294 láminas.
      *
-     * @param albumId  El ID del álbum.
-     * @param category La categoría temática de las láminas.
-     * @return Lista de láminas del álbum con la categoría indicada.
+     * @return {@code true} si el catálogo tiene al menos una fila.
      */
-    List<Sticker> findByAlbumIdAndCategory(Long albumId, StickerCategory category);
-
-    /**
-     * Obtiene las láminas de un álbum filtradas por rareza.
-     * Se usa para mostrar secciones especiales con las láminas legendarias
-     * o raras del usuario.
-     *
-     * @param albumId El ID del álbum.
-     * @param rarity  La rareza de las láminas.
-     * @return Lista de láminas del álbum con la rareza indicada.
-     */
-    List<Sticker> findByAlbumIdAndRarity(Long albumId, StickerRarity rarity);
-
-    /**
-     * Busca las láminas de un álbum con un código de catálogo específico.
-     * Se usa para contar cuántas copias de una lámina tiene el usuario
-     * (si hay más de una, la segunda en adelante son repetidas).
-     *
-     * @param albumId     El ID del álbum.
-     * @param stickerCode El código de catálogo de la lámina (ej. "COL-01").
-     * @return Lista de láminas del álbum con ese código (normalmente 1 o 2).
-     */
-    List<Sticker> findByAlbumIdAndStickerCode(Long albumId, String stickerCode);
-
-    /**
-     * Cuenta el número total de láminas únicas (no repetidas) en un álbum.
-     * Se usa para calcular el porcentaje de completitud del álbum.
-     *
-     * @param albumId El ID del álbum.
-     * @param status  El estado de las láminas a contar (normalmente {@code PLACED}).
-     * @return Número de láminas del álbum con el estado indicado.
-     */
-    long countByAlbumIdAndStatus(Long albumId, StickerStatus status);
+    @Override
+    long count();
 }
