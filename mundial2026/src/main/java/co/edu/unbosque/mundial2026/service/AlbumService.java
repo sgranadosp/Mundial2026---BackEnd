@@ -207,4 +207,79 @@ public class AlbumService {
     public long getCatalogSize() {
         return stickerRepo.count();
     }
+
+    // =========================================================================
+    // Álbum completo del usuario (todas las selecciones en una sola página)
+    // =========================================================================
+
+    /**
+     * Devuelve el álbum completo del usuario como una única página agrupando
+     * las láminas de todas las selecciones, opcionalmente filtrada por estado
+     * de posesión.
+     * <p>
+     * El catálogo se ordena primero por nombre de selección (case-insensitive)
+     * y dentro de cada selección por posición ascendente, dejando las páginas
+     * de "especiales" al final para que la vista del frontend mantenga un
+     * orden estable y predecible.
+     * </p>
+     *
+     * @param userId ID del usuario consultante.
+     * @param filter Filtro de estado: {@code TODAS} (por defecto), {@code PEGADA},
+     *               {@code REPETIDA} o {@code FALTANTE}.
+     * @return {@link AlbumPageDTO} con countryCode {@code "all"} y todos los
+     *         slots; {@code null} si el usuario no existe.
+     */
+    public AlbumPageDTO getFullAlbum(Long userId, String filter) {
+        Optional<User> userOpt = userRepo.findById(userId);
+        if (userOpt.isEmpty()) return null;
+        User user = userOpt.get();
+
+        List<Sticker> catalogo = stickerRepo.findAll();
+        catalogo.sort(Comparator
+                .comparing((Sticker s) -> "especial".equals(s.getCountryCode()) ? 1 : 0)
+                .thenComparing(s -> s.getCountryName().toLowerCase())
+                .thenComparing(Sticker::getPosition));
+
+        List<UserSticker> propias = userStickerRepo.findByUser(user);
+        Map<Long, UserSticker> propiasById = new HashMap<>();
+        for (UserSticker us : propias) {
+            propiasById.put(us.getSticker().getId(), us);
+        }
+
+        List<StickerSlotDTO> slots = new ArrayList<>();
+        for (Sticker s : catalogo) {
+            UserSticker propia = propiasById.get(s.getId());
+            StickerSlotDTO slot;
+            if (propia == null) {
+                slot = new StickerSlotDTO(s.getCode(), s.getPosition(),
+                        null, Status.FALTANTE, 0);
+            } else if (propia.getQuantity() >= 2) {
+                slot = new StickerSlotDTO(s.getCode(), s.getPosition(),
+                        IMAGE_URL_PREFIX + s.getCode() + ".png",
+                        Status.REPETIDA, propia.getQuantity());
+            } else {
+                slot = new StickerSlotDTO(s.getCode(), s.getPosition(),
+                        IMAGE_URL_PREFIX + s.getCode() + ".png",
+                        Status.PEGADA, propia.getQuantity());
+            }
+            slots.add(slot);
+        }
+
+        if (filter != null && !filter.isBlank() && !"TODAS".equalsIgnoreCase(filter)) {
+            Status target;
+            try {
+                target = Status.valueOf(filter.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                target = null;
+            }
+            if (target != null) {
+                final Status t = target;
+                slots = slots.stream()
+                        .filter(slot -> slot.getStatus() == t)
+                        .collect(Collectors.toList());
+            }
+        }
+
+        return new AlbumPageDTO("all", "Toda mi colección", slots);
+    }
 }

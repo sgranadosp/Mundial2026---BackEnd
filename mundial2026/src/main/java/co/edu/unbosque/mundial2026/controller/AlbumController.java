@@ -82,6 +82,34 @@ public class AlbumController {
     // =========================================================================
 
     /**
+     * Devuelve el álbum completo del usuario como una única página agrupando
+     * las láminas de todas las selecciones, opcionalmente filtrada por estado.
+     * <p>
+     * Pensado para la vista inicial del álbum cuando aún no hay una selección
+     * elegida en el autocomplete, de modo que el usuario vea toda su colección
+     * sin tener que iterar selección por selección.
+     * </p>
+     *
+     * @param userId ID del usuario consultante.
+     * @param filter Filtro de estado: {@code TODAS} (por defecto), {@code PEGADA},
+     *               {@code REPETIDA}, {@code FALTANTE}.
+     * @return 200 OK con la página completa; 404 si el usuario no existe.
+     */
+    @GetMapping("/users/{userId}/pages")
+    @Operation(summary = "Ver álbum completo del usuario",
+               description = "Devuelve todas las láminas del catálogo con el estado del usuario,"
+                       + " opcionalmente filtradas por PEGADA, REPETIDA o FALTANTE.")
+    public ResponseEntity<?> getFullAlbum(@PathVariable Long userId,
+                                           @RequestParam(required = false, defaultValue = "TODAS") String filter) {
+        AlbumPageDTO page = albumService.getFullAlbum(userId, filter);
+        if (page == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", "Usuario no encontrado", "success", false));
+        }
+        return ResponseEntity.ok(page);
+    }
+
+    /**
      * Devuelve la página del álbum del usuario para una selección, opcionalmente
      * filtrada por estado de posesión.
      *

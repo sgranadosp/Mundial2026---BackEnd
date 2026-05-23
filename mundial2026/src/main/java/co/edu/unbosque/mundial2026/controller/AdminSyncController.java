@@ -17,6 +17,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import co.edu.unbosque.mundial2026.service.FootballApiSyncService;
 import co.edu.unbosque.mundial2026.service.FootballApiSyncService.SyncReport;
+import co.edu.unbosque.mundial2026.service.OpenFootballSyncService;
+import co.edu.unbosque.mundial2026.service.OpenFootballSyncService.VenueSyncReport;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -39,6 +41,9 @@ public class AdminSyncController {
 
     @Autowired
     private FootballApiSyncService syncService;
+
+    @Autowired
+    private OpenFootballSyncService venuesSyncService;
 
     /** Constructor por defecto requerido por Spring. */
     public AdminSyncController() {
@@ -79,6 +84,55 @@ public class AdminSyncController {
         map.put("skippedNoTeams", r.skippedNoTeams);
         map.put("errors", r.errors);
         map.put("totalGroupStageMatchesInDb", r.totalInDb);
+        return map;
+    }
+
+    /**
+     * Sincroniza los estadios (venues) y los asigna a los partidos ya
+     * existentes en BD, usando como fuente
+     * <a href="https://github.com/openfootball/worldcup.json">openfootball/worldcup.json</a>.
+     * <p>
+     * Diseñado para correr DESPUÉS de {@link #syncFixtures()}: complementa los
+     * partidos importados desde football-data.org (que vienen sin venue)
+     * asignándoles el estadio correcto según la sede oficial publicada por
+     * openfootball.
+     * </p>
+     * <p>
+     * No requiere API key (el dataset es open public domain). La operación
+     * es idempotente y se puede ejecutar las veces que sea necesario.
+     * </p>
+     *
+     * @return Reporte JSON con métricas del sync de venues.
+     */
+    @PostMapping("/venues")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Sincroniza estadios y asigna venues a partidos",
+               description = "Trae los 16 estadios del Mundial 2026 y asigna cada partido en BD"
+                       + " a su sede oficial, usando el dataset open public domain"
+                       + " openfootball/worldcup.json. Solo admin.")
+    public ResponseEntity<Map<String, Object>> syncVenues() {
+        log.info("Admin solicitó sincronización de venues");
+        VenueSyncReport report = venuesSyncService.syncVenues();
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("message", "Sincronización de venues completada");
+        response.put("report", venuesReportToMap(report));
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Convierte el VenueSyncReport a un Map para serialización JSON limpia.
+     */
+    private Map<String, Object> venuesReportToMap(VenueSyncReport r) {
+        Map<String, Object> map = new HashMap<>();
+        map.put("stadiumsCreated", r.stadiumsCreated);
+        map.put("stadiumsUpdated", r.stadiumsUpdated);
+        map.put("fetchedFromOpenFootball", r.fetchedFromOpenFootball);
+        map.put("matchesAssigned", r.matchesAssigned);
+        map.put("matchesAlreadyAssigned", r.matchesAlreadyAssigned);
+        map.put("matchesNotInDb", r.matchesNotInDb);
+        map.put("unmappedGrounds", r.unmappedGrounds);
         return map;
     }
 }

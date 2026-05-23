@@ -96,6 +96,28 @@ public class MatchDTO {
     private String stadiumTimezone;
 
     /**
+     * Latitud del estadio (WGS84). Usada por el cliente para renderizar el
+     * mapa de ubicación en la vista de detalle del partido.
+     */
+    private Double stadiumLatitude;
+
+    /**
+     * Longitud del estadio (WGS84). Usada por el cliente para renderizar el
+     * mapa de ubicación en la vista de detalle del partido.
+     */
+    private Double stadiumLongitude;
+
+    /**
+     * Capacidad del estadio. Puede ser {@code null} si no se conoce.
+     */
+    private Integer stadiumCapacity;
+
+    /**
+     * URL de la imagen del estadio. Puede ser {@code null}.
+     */
+    private String stadiumImageUrl;
+
+    /**
      * Fecha y hora programada del partido en UTC.
      */
     private LocalDateTime scheduledAt;
@@ -229,6 +251,30 @@ public class MatchDTO {
 
     /** @param stadiumTimezone La nueva zona horaria. */
     public void setStadiumTimezone(String stadiumTimezone) { this.stadiumTimezone = stadiumTimezone; }
+
+    /** @return La latitud del estadio (WGS84). */
+    public Double getStadiumLatitude() { return stadiumLatitude; }
+
+    /** @param stadiumLatitude La nueva latitud del estadio. */
+    public void setStadiumLatitude(Double stadiumLatitude) { this.stadiumLatitude = stadiumLatitude; }
+
+    /** @return La longitud del estadio (WGS84). */
+    public Double getStadiumLongitude() { return stadiumLongitude; }
+
+    /** @param stadiumLongitude La nueva longitud del estadio. */
+    public void setStadiumLongitude(Double stadiumLongitude) { this.stadiumLongitude = stadiumLongitude; }
+
+    /** @return La capacidad del estadio o {@code null} si no se conoce. */
+    public Integer getStadiumCapacity() { return stadiumCapacity; }
+
+    /** @param stadiumCapacity La nueva capacidad del estadio. */
+    public void setStadiumCapacity(Integer stadiumCapacity) { this.stadiumCapacity = stadiumCapacity; }
+
+    /** @return La URL de la imagen del estadio o {@code null}. */
+    public String getStadiumImageUrl() { return stadiumImageUrl; }
+
+    /** @param stadiumImageUrl La nueva URL de imagen del estadio. */
+    public void setStadiumImageUrl(String stadiumImageUrl) { this.stadiumImageUrl = stadiumImageUrl; }
 
     /** @return La fecha y hora programada en UTC. */
     public LocalDateTime getScheduledAt() { return scheduledAt; }

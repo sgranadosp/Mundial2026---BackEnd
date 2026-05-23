@@ -337,6 +337,10 @@ public class MatchService implements CRUDOperation<MatchDTO, Match> {
             dto.setStadiumName(entity.getStadium().getName());
             dto.setStadiumCity(entity.getStadium().getCity());
             dto.setStadiumTimezone(entity.getStadium().getTimezone());
+            dto.setStadiumLatitude(entity.getStadium().getLatitude());
+            dto.setStadiumLongitude(entity.getStadium().getLongitude());
+            dto.setStadiumCapacity(entity.getStadium().getCapacity());
+            dto.setStadiumImageUrl(entity.getStadium().getImageUrl());
         }
         return dto;
     }
