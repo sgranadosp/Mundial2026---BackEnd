@@ -27,6 +27,7 @@ import co.edu.unbosque.mundial2026.repository.PollGroupRepository;
 import co.edu.unbosque.mundial2026.repository.PredictionRepository;
 import co.edu.unbosque.mundial2026.repository.UserRepository;
 import co.edu.unbosque.mundial2026.util.ScoringUtil;
+import co.edu.unbosque.mundial2026.service.PackService;
 
 /**
  * Servicio encargado de la lógica de negocio de pollas futboleras y pronósticos.
@@ -64,6 +65,9 @@ public class PollService {
 
     @Autowired
     private ModelMapper modelMapper;
+    
+    @Autowired
+    private PackService packService;
 
     public PollService() {
     }
@@ -284,6 +288,11 @@ public class PollService {
                 data.getPredictedHomeScore(), data.getPredictedAwayScore()
         );
         predictionRepo.save(prediction);
+
+        // Notificar al PackService para evaluar si el usuario alcanzó un
+        // múltiplo de 6 predicciones y otorgar el pack POLL correspondiente.
+        packService.onPredictionSubmitted(userId);
+
         return 0;
     }
 
