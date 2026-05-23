@@ -119,7 +119,18 @@ public class MatchDTO {
 
     /**
      * Fecha y hora programada del partido en UTC.
+     * <p>
+     * Se serializa con sufijo {@code 'Z'} explícito (ej.
+     * {@code "2026-06-12T02:00:00Z"}) para que el cliente JavaScript la
+     * interprete inequívocamente como UTC al hacer {@code new Date(...)}.
+     * Sin la {@code Z}, los navegadores interpretan el string como hora
+     * local, causando desfases de zona horaria visibles en la UI.
+     * </p>
      */
+    @com.fasterxml.jackson.annotation.JsonFormat(
+            shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING,
+            pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            timezone = "UTC")
     private LocalDateTime scheduledAt;
 
     /**
