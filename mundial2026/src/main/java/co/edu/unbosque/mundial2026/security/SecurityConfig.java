@@ -108,6 +108,14 @@ public class SecurityConfig {
                 // ya posee saberlo viene controlado en /album/** que sí requiere JWT.
                 auth.requestMatchers("/laminas/**").permitAll();
 
+                // Webhook de MercadoPago: público para que MercadoPago pueda
+                // notificarnos sin manejar JWT. La validación de autenticidad
+                // se hace por el preferenceId que solo nosotros conocemos.
+                auth.requestMatchers("/payments/webhook").permitAll();
+
+                // Resto del módulo de pagos: requiere usuario autenticado.
+                auth.requestMatchers("/payments/**").hasAnyRole("USER", "ADMIN");
+
                 // Rutas accesibles por USER y ADMIN
                 auth.requestMatchers(
                         "GET:/matches",

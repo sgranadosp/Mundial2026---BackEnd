@@ -112,6 +112,15 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
     long countActiveTicketsByOriginalBuyerId(@Param("originalBuyerId") Long originalBuyerId);
 
     /**
+     * Busca una entrada por el ID de preference de MercadoPago. Se usa al
+     * recibir un webhook para identificar qué ticket actualizar.
+     *
+     * @param mpPreferenceId El ID de preference asignado por MercadoPago.
+     * @return Un {@link Optional} con la entrada, o vacío si no existe.
+     */
+    Optional<Ticket> findByMpPreferenceId(String mpPreferenceId);
+
+    /**
      * Verifica si ya existe una entrada con el ID de correlación dado.
      * Se usa antes de crear una reserva para garantizar la unicidad del
      * correlationId generado.

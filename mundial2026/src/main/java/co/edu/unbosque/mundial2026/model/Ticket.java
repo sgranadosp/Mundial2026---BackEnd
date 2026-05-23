@@ -97,6 +97,22 @@ public class Ticket {
     private Double price;
 
     /**
+     * ID de la "preference" generada por MercadoPago al iniciar el flujo
+     * de pago. Se usa para correlacionar webhooks de MercadoPago con el
+     * ticket correspondiente. {@code null} si la entrada no ha pasado por
+     * la pasarela de pago.
+     */
+    @Column(name = "mp_preference_id")
+    private String mpPreferenceId;
+
+    /**
+     * ID del pago final asignado por MercadoPago una vez que el usuario
+     * completa la transacción. Se llena al recibir el webhook de pago.
+     */
+    @Column(name = "mp_payment_id")
+    private String mpPaymentId;
+
+    /**
      * Fecha y hora en que la reserva fue creada.
      */
     private LocalDateTime reservedAt;
@@ -233,6 +249,18 @@ public class Ticket {
 
     /** @param price El nuevo precio simulado. */
     public void setPrice(Double price) { this.price = price; }
+
+    /** @return El ID de preference de MercadoPago, o {@code null}. */
+    public String getMpPreferenceId() { return mpPreferenceId; }
+
+    /** @param mpPreferenceId El ID de preference asignado por MercadoPago. */
+    public void setMpPreferenceId(String mpPreferenceId) { this.mpPreferenceId = mpPreferenceId; }
+
+    /** @return El ID de payment final de MercadoPago, o {@code null}. */
+    public String getMpPaymentId() { return mpPaymentId; }
+
+    /** @param mpPaymentId El ID de payment asignado por MercadoPago al cobrar. */
+    public void setMpPaymentId(String mpPaymentId) { this.mpPaymentId = mpPaymentId; }
 
     /** @return La fecha y hora en que se realizó la reserva. */
     public LocalDateTime getReservedAt() { return reservedAt; }
