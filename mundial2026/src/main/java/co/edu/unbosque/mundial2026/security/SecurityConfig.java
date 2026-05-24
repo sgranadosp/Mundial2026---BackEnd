@@ -137,6 +137,7 @@ public class SecurityConfig {
                         "PUT:/tickets/*/pay",
                         "PUT:/tickets/*/transfer",
                         "PUT:/tickets/*/refund",
+                        "PUT:/tickets/*/cancel",
                         "GET:/tickets/user/**",
                         "GET:/tickets/correlation/**").hasAnyRole("USER", "ADMIN");
 
@@ -161,6 +162,25 @@ public class SecurityConfig {
                 auth.requestMatchers(
                         "POST:/matches/admin/**",
                         "PUT:/matches/admin/**").hasRole("ADMIN");
+
+                // El inbox in-app de notificaciones lo consulta el propio
+                // USER (no solo el admin). Hay que listarlo ANTES de la
+                // regla general "/notifications/**: ADMIN" porque Spring
+                // Security matchea en orden y la primera coincidencia gana.
+                // Los endpoints de envío (POST /notifications/send, broadcast,
+                // etc.) siguen siendo ADMIN-only gracias a la regla general
+                // que aplica después.
+                //
+                // IMPORTANTE: el verbo HTTP se pasa como primer argumento
+                // a requestMatchers(HttpMethod, String...). La sintaxis
+                // "GET:/path" como string es ignorada por Spring Security
+                // (la trata como path literal) y la regla no matchea.
+                auth.requestMatchers(
+                        org.springframework.http.HttpMethod.GET,
+                        "/notifications/inbox/**").hasAnyRole("USER", "ADMIN");
+                auth.requestMatchers(
+                        org.springframework.http.HttpMethod.PUT,
+                        "/notifications/inbox/**").hasAnyRole("USER", "ADMIN");
 
                 auth.requestMatchers("/notifications/**").hasRole("ADMIN");
                 auth.requestMatchers("POST:/tickets/admin/**").hasRole("ADMIN");

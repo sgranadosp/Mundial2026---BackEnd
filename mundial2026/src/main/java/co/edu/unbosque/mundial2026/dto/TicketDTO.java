@@ -63,6 +63,17 @@ public class TicketDTO {
     private String stadiumCity;
 
     /**
+     * Latitud del estadio. Permite renderizar un mapa del estadio en
+     * la pantalla "Mis Entradas" sin tener que hacer otra request.
+     */
+    private Double stadiumLatitude;
+
+    /**
+     * Longitud del estadio.
+     */
+    private Double stadiumLongitude;
+
+    /**
      * ID del usuario titular actual de la entrada.
      */
     private Long holderId;
@@ -191,6 +202,18 @@ public class TicketDTO {
 
     /** @param stadiumCity La nueva ciudad. */
     public void setStadiumCity(String stadiumCity) { this.stadiumCity = stadiumCity; }
+
+    /** @return Latitud del estadio. */
+    public Double getStadiumLatitude() { return stadiumLatitude; }
+
+    /** @param stadiumLatitude Nueva latitud. */
+    public void setStadiumLatitude(Double stadiumLatitude) { this.stadiumLatitude = stadiumLatitude; }
+
+    /** @return Longitud del estadio. */
+    public Double getStadiumLongitude() { return stadiumLongitude; }
+
+    /** @param stadiumLongitude Nueva longitud. */
+    public void setStadiumLongitude(Double stadiumLongitude) { this.stadiumLongitude = stadiumLongitude; }
 
     /** @return El ID del titular actual. */
     public Long getHolderId() { return holderId; }

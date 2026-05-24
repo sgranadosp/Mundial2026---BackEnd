@@ -195,6 +195,41 @@ public class TicketController {
         };
     }
 
+    /**
+     * Cancela una reserva del propio usuario titular antes de que se haya
+     * confirmado el pago. Marca el ticket como EXPIRED y libera el cupo
+     * para que otro usuario pueda comprarlo.
+     *
+     * Es complementario a {@link #refund} (que aplica a entradas PAID) y
+     * permite al usuario "deshacer" una reserva sin esperar a que venza
+     * el TTL.
+     *
+     * @param ticketId El ID de la reserva a cancelar.
+     * @param userId   El ID del usuario titular.
+     * @return 202 Accepted si fue cancelada; 404 si no existe;
+     *         403 si no es una reserva activa del usuario.
+     */
+    @PutMapping("/{ticketId}/cancel")
+    @Operation(summary = "Cancelar reserva propia",
+               description = "Permite al usuario cancelar una reserva propia antes de pagar. Solo aplica a entradas en estado RESERVED.")
+    public ResponseEntity<?> cancel(@PathVariable Long ticketId,
+                                     @RequestParam Long userId) {
+        int status = ticketService.cancelReservation(ticketId, userId);
+
+        return switch (status) {
+            case 0 -> ResponseEntity.status(HttpStatus.ACCEPTED)
+                    .body(Map.of("message", "Reserva cancelada exitosamente", "success", true));
+            case 2 -> ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", "Entrada no encontrada", "success", false));
+            case 4 -> ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("message",
+                            "La entrada no es una reserva activa o no eres el titular",
+                            "success", false));
+            default -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", "Error al cancelar la reserva", "success", false));
+        };
+    }
+
     // =========================================================================
     // Consultas
     // =========================================================================

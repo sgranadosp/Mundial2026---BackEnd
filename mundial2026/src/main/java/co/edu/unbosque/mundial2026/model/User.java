@@ -114,8 +114,12 @@ public class User implements UserDetails {
      * elegido equipo favorito. Se resuelve contra
      * {@link co.edu.unbosque.mundial2026.repository.TeamRepository#findByIsoCode}
      * para obtener el {@link Team} cuando se necesita.
+     *
+     * La longitud es 32 para tolerar tanto códigos ISO alfa-3 como
+     * identificadores cortos del equipo (id numérico o nombre corto),
+     * según lo que el cliente decida enviar.
      */
-    @Column(name = "favorite_team_code", length = 3)
+    @Column(name = "favorite_team_code", length = 32)
     private String favoriteTeamCode;
 
     /**

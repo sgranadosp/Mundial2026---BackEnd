@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import co.edu.unbosque.mundial2026.dto.PollGroupDTO;
 import co.edu.unbosque.mundial2026.dto.PredictionDTO;
 import co.edu.unbosque.mundial2026.dto.RankingDTO;
+import co.edu.unbosque.mundial2026.dto.NotificationDTO;
 import co.edu.unbosque.mundial2026.model.Match;
 import co.edu.unbosque.mundial2026.model.Match.MatchStatus;
 import co.edu.unbosque.mundial2026.model.PollGroup;
@@ -68,6 +69,13 @@ public class PollService {
     
     @Autowired
     private PackService packService;
+
+    /**
+     * Servicio de notificaciones. Se usa para avisar al dueño de un grupo
+     * de polla cuando un nuevo miembro se une por código de invitación.
+     */
+    @Autowired
+    private NotificationService notificationService;
 
     public PollService() {
     }
@@ -136,6 +144,31 @@ public class PollService {
         }
         pg.getMembers().add(user.get());
         pollGroupRepo.save(pg);
+
+        // Notificación al creador del grupo: alguien nuevo se unió.
+        // No interrumpe la transacción si falla el envío.
+        try {
+            if (pg.getOwner() != null
+                    && !pg.getOwner().getId().equals(userId)) {
+                User newMember = user.get();
+                String memberName = newMember.getUsername() != null
+                        ? newMember.getUsername()
+                        : "Un usuario";
+                NotificationDTO dto = new NotificationDTO(
+                        pg.getOwner().getId(),
+                        "Nuevo miembro en tu polla",
+                        memberName + " se unió a tu grupo \""
+                                + pg.getName() + "\".",
+                        "IN_APP",
+                        "POLL_JOINED");
+                dto.setResourceId(pg.getId());
+                notificationService.sendToUser(dto);
+            }
+        } catch (Exception ex) {
+            System.err.println("[PollService] Notif al unirse: "
+                    + ex.getMessage());
+        }
+
         return 0;
     }
 

@@ -202,6 +202,38 @@ public class TicketService {
     }
 
     /**
+     * Cancela una reserva en estado RESERVED iniciada por el propio
+     * usuario titular. A diferencia de {@link #expireReservations()} que
+     * es un job batch del admin, este método permite al usuario liberar
+     * voluntariamente una entrada que aún no ha pagado, sin esperar a
+     * que venza el TTL.
+     *
+     * Marca el ticket como EXPIRED (reusamos el estado existente para no
+     * añadir uno nuevo). El cupo queda libre para que otro usuario lo
+     * reserve.
+     *
+     * @param ticketId El ID de la entrada a cancelar.
+     * @param userId   El ID del usuario titular (debe coincidir con el
+     *                 holder actual).
+     * @return 0 si se canceló; 2 si no existe; 4 si no es elegible
+     *         (no es RESERVED o el usuario no es el titular).
+     */
+    public int cancelReservation(Long ticketId, Long userId) {
+        Optional<Ticket> found = ticketRepo.findById(ticketId);
+        if (found.isEmpty()) return 2;
+
+        Ticket ticket = found.get();
+        if (!ticket.getHolder().getId().equals(userId)) return 4;
+        if (ticket.getStatus() != TicketStatus.RESERVED) return 4;
+
+        ticket.setStatus(TicketStatus.EXPIRED);
+        ticketRepo.save(ticket);
+
+        auditService.logTicketExpired(userId, ticket.getCorrelationId());
+        return 0;
+    }
+
+    /**
      * Job de expiración de reservas. Busca todas las entradas {@code RESERVED}
      * cuyo TTL ya venció y las marca como {@code EXPIRED}, liberando el cupo.
      * Debe invocarse periódicamente desde un {@code @Scheduled} en el controlador
@@ -317,6 +349,8 @@ public class TicketService {
             if (ticket.getMatch().getStadium() != null) {
                 dto.setStadiumName(ticket.getMatch().getStadium().getName());
                 dto.setStadiumCity(ticket.getMatch().getStadium().getCity());
+                dto.setStadiumLatitude(ticket.getMatch().getStadium().getLatitude());
+                dto.setStadiumLongitude(ticket.getMatch().getStadium().getLongitude());
             }
         }
         return dto;

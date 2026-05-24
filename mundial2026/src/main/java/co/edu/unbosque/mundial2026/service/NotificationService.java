@@ -64,6 +64,15 @@ public class NotificationService {
     private AuditEventService auditService;
 
     /**
+     * Servicio que persiste cada notificación enviada en el inbox del
+     * usuario, para que pueda consultar el historial desde la pantalla
+     * "Notificaciones" del frontend aunque el push se haya enviado
+     * cuando no tenía el navegador abierto.
+     */
+    @Autowired
+    private NotificationInboxService inboxService;
+
+    /**
      * Cliente de Firebase Cloud Messaging para enviar push al navegador del
      * usuario. Inyectado por la configuración {@code FirebaseConfig}.
      */
@@ -98,13 +107,53 @@ public class NotificationService {
         userRepo.findById(dto.getTargetUserId()).ifPresent(user -> {
             boolean sent = false;
 
-            if (user.isPushNotificationsEnabled()) {
+            /*
+             * El canal elegido por el admin actúa como FILTRO ADICIONAL
+             * sobre las preferencias del usuario:
+             *
+             *   - channel == "PUSH"  → enviar push si el usuario lo tiene
+             *                          habilitado, NO enviar email.
+             *   - channel == "EMAIL" → enviar email si el usuario lo tiene
+             *                          habilitado, NO enviar push.
+             *   - channel == "BOTH"  → enviar por ambos canales (si están
+             *                          habilitados en las preferencias).
+             *   - channel null / cualquier otro / "IN_APP" → comportamiento
+             *                          tipo "BOTH" para no romper llamadas
+             *                          internas (PollService, TradeService)
+             *                          que pasan channel="IN_APP".
+             */
+            String channel = dto.getChannel();
+            boolean enviarPush = channel == null
+                    || "PUSH".equalsIgnoreCase(channel)
+                    || "BOTH".equalsIgnoreCase(channel)
+                    || "IN_APP".equalsIgnoreCase(channel);
+            boolean enviarEmail = channel == null
+                    || "EMAIL".equalsIgnoreCase(channel)
+                    || "BOTH".equalsIgnoreCase(channel)
+                    || "IN_APP".equalsIgnoreCase(channel);
+
+            // Log de diagnóstico: permite verificar en la consola del
+            // backend qué canal llegó y qué flags se computaron. Sirve
+            // para descartar mismatch frontend/backend o cachés Spring.
+            log.info("[notif/sendToUser] user={} channel='{}' enviarPush={} enviarEmail={} pushPref={} emailPref={}",
+                    user.getId(), channel, enviarPush, enviarEmail,
+                    user.isPushNotificationsEnabled(),
+                    user.isEmailNotificationsEnabled());
+
+            if (enviarPush && user.isPushNotificationsEnabled()) {
                 sent = sendPush(user, dto.getTitle(), dto.getBody(),
                         dto.getNotificationType(), dto.getResourceId());
             }
-            if (user.isEmailNotificationsEnabled()) {
+            if (enviarEmail && user.isEmailNotificationsEnabled()) {
                 sent = sendEmail(user, dto.getTitle(), dto.getBody()) || sent;
             }
+
+            // Persistir SIEMPRE en el inbox in-app, independientemente del
+            // canal elegido o del éxito del envío. El inbox es el historial
+            // local del usuario y debe verlo aunque su navegador estuviera
+            // cerrado o sin token FCM en el momento del envío.
+            inboxService.saveForUser(user.getId(), dto.getTitle(),
+                    dto.getBody(), dto.getNotificationType());
 
             if (sent) {
                 auditService.logNotificationSent(user.getId(), dto.getChannel(), dto.getTitle());
@@ -153,6 +202,10 @@ public class NotificationService {
             if (user.isEmailNotificationsEnabled()) {
                 sent = sendEmail(user, title, body) || sent;
             }
+            // Inbox in-app: cada destinatario del broadcast recibe una
+            // entrada visible aunque sus canales push/email estén apagados.
+            inboxService.saveForUser(user.getId(), title, body, notificationType);
+
             if (sent) {
                 auditService.logNotificationSent(user.getId(), "BROADCAST_TEAM:" + code, title);
                 notified++;
@@ -195,6 +248,9 @@ public class NotificationService {
             if (user.isEmailNotificationsEnabled()) {
                 sent = sendEmail(user, title, body) || sent;
             }
+            // Inbox in-app: ver comentario en sendToTeamFollowers.
+            inboxService.saveForUser(user.getId(), title, body, notificationType);
+
             if (sent) {
                 auditService.logNotificationSent(user.getId(), "BROADCAST_CITY:" + city, title);
                 notified++;

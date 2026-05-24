@@ -521,6 +521,7 @@ public class TradeService {
      */
     private void notifyTradeCompleted(User creator, User accepter,
                                        Sticker offered, Sticker requested) {
+        // Notif al CREADOR del intercambio: alguien aceptó su propuesta.
         try {
             String title = "¡Intercambio completado!";
             String body = accepter.getUsername()
@@ -530,11 +531,29 @@ public class TradeService {
                     + offered.getCountryName() + " — posición " + offered.getPosition() + "\".";
 
             NotificationDTO dto = new NotificationDTO(
-                    creator.getId(), title, body, "IN_APP", "EXCHANGE_REQUEST");
+                    creator.getId(), title, body, "IN_APP", "EXCHANGE_COMPLETED");
             notificationService.sendToUser(dto);
         } catch (Exception e) {
-            // Loguear sin romper la transacción del intercambio.
-            System.err.println("[TradeService] Error enviando notificación in-app: " + e.getMessage());
+            System.err.println("[TradeService] Error notif in-app creator: " + e.getMessage());
+        }
+
+        // Notif al ACCEPTER del intercambio: el cambio se completó por su lado.
+        // Se le informa qué lámina entregó y cuál recibió, en su propia
+        // perspectiva (entregó "requested" y recibió "offered" — es el
+        // espejo del creator).
+        try {
+            String title = "¡Intercambio completado!";
+            String body = "Completaste el intercambio con "
+                    + creator.getUsername() + ". Recibiste \""
+                    + offered.getCountryName() + " — posición " + offered.getPosition()
+                    + "\" y entregaste \""
+                    + requested.getCountryName() + " — posición " + requested.getPosition() + "\".";
+
+            NotificationDTO dto = new NotificationDTO(
+                    accepter.getId(), title, body, "IN_APP", "EXCHANGE_COMPLETED");
+            notificationService.sendToUser(dto);
+        } catch (Exception e) {
+            System.err.println("[TradeService] Error notif in-app accepter: " + e.getMessage());
         }
 
         try {
