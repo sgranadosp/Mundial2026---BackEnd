@@ -15,17 +15,14 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import co.edu.unbosque.mundial2026.dto.MatchDTO;
-import co.edu.unbosque.mundial2026.model.Match;
 import co.edu.unbosque.mundial2026.model.Match.MatchStatus;
 import co.edu.unbosque.mundial2026.model.Match.Phase;
-import co.edu.unbosque.mundial2026.service.ExternalMatchService;
 import co.edu.unbosque.mundial2026.service.MatchService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -35,8 +32,16 @@ import io.swagger.v3.oas.annotations.tags.Tag;
  * Controlador REST para la consulta y gestión de partidos del Mundial 2026.
  * Provee los endpoints del módulo de partidos: listado general, detalle,
  * resultados y filtros por fecha, equipo, estadio y fase (HU06, HU07, HU08,
- * HU09, HU10). Los endpoints de sincronización con la API externa son
- * exclusivos para administradores.
+ * HU09, HU10).
+ * <p>
+ * La sincronización de partidos contra la API externa (football-data.org)
+ * se gestiona desde {@code AdminSyncController} mediante el endpoint
+ * {@code POST /admin/sync/fixtures}, que utiliza {@code FootballApiSyncService}.
+ * Este controlador ya no expone un sync alternativo: el legacy
+ * {@code POST /matches/admin/sync} (junto con su dependencia
+ * {@code ExternalMatchService}) fue retirado por estar duplicado y no contar
+ * con configuración real en {@code application.properties}.
+ * </p>
  */
 @RestController
 @RequestMapping("/matches")
@@ -51,12 +56,6 @@ public class MatchController {
      */
     @Autowired
     private MatchService matchService;
-
-    /**
-     * Adaptador del servicio externo de datos deportivos.
-     */
-    @Autowired
-    private ExternalMatchService externalMatchService;
 
     /**
      * Constructor por defecto requerido por Spring.
@@ -204,26 +203,6 @@ public class MatchController {
     // =========================================================================
 
     /**
-     * Sincroniza todos los partidos desde la API externa (football-data.org o
-     * WireMock). Crea o actualiza registros sin duplicar. Solo ADMIN.
-     *
-     * @return 200 OK con el número de partidos sincronizados; 500 si falla la API.
-     */
-    @PostMapping("/admin/sync")
-    @Operation(summary = "Sincronizar partidos desde API externa",
-               description = "Solo ADMIN. Importa o actualiza todos los partidos desde la fuente de datos.")
-    @Transactional(readOnly = true)
-    public ResponseEntity<?> syncFromExternalApi() {
-        int synced = externalMatchService.syncAllMatches();
-        if (synced >= 0) {
-            return ResponseEntity.ok(
-                    Map.of("message", "Sincronización completada", "synced", synced, "success", true));
-        }
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Map.of("message", "Error al conectar con la API externa", "success", false));
-    }
-
-    /**
      * Actualiza manualmente el resultado de un partido finalizado.
      * Solo ADMIN. Usado cuando la API externa no actualiza automáticamente.
      *
@@ -275,7 +254,6 @@ public class MatchController {
         }
         return new ResponseEntity<>(count, HttpStatus.ACCEPTED);
     }
-    
 
     /**
      * Devuelve los partidos de fase de grupos disponibles para pronosticar:
@@ -290,7 +268,7 @@ public class MatchController {
     public ResponseEntity<List<MatchDTO>> availableForPolls() {
         return ResponseEntity.ok(matchService.getAvailableForPolls());
     }
- 
+
     /**
      * Devuelve los partidos de fase de grupos disponibles para compra de tickets.
      *
@@ -303,5 +281,5 @@ public class MatchController {
     public ResponseEntity<List<MatchDTO>> availableForTickets() {
         return ResponseEntity.ok(matchService.getAvailableForTickets());
     }
- 
+
 }
