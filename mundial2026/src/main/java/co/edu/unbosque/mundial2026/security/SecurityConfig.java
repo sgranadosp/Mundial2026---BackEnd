@@ -130,6 +130,7 @@ public class SecurityConfig {
 
                 auth.requestMatchers("/polls/**").hasAnyRole("USER", "ADMIN");
                 auth.requestMatchers("/album/**").hasAnyRole("USER", "ADMIN");
+                auth.requestMatchers("/fcm-token/**").hasAnyRole("USER", "ADMIN");
 
                 auth.requestMatchers(
                         "POST:/tickets/reserve",

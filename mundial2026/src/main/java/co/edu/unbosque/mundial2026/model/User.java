@@ -65,6 +65,14 @@ public class User implements UserDetails {
 
     private boolean emailNotificationsEnabled;
 
+    /**
+     * Token de Firebase Cloud Messaging del dispositivo/navegador del usuario.
+     * Se actualiza cada vez que el cliente se loguea y obtiene un token fresco.
+     * Puede ser {@code null} si el usuario aún no autorizó notificaciones push.
+     */
+    @Column(name = "fcm_token", length = 512)
+    private String fcmToken;
+
     private boolean accountNonExpired;
 
     private boolean accountNonLocked;
@@ -169,6 +177,12 @@ public class User implements UserDetails {
     public void setEmailNotificationsEnabled(boolean emailNotificationsEnabled) {
         this.emailNotificationsEnabled = emailNotificationsEnabled;
     }
+
+    /** @return Token FCM del dispositivo del usuario, o null si no se ha registrado. */
+    public String getFcmToken() { return fcmToken; }
+
+    /** @param fcmToken Nuevo token FCM. */
+    public void setFcmToken(String fcmToken) { this.fcmToken = fcmToken; }
 
     public void setAccountNonExpired(boolean accountNonExpired) {
         this.accountNonExpired = accountNonExpired;

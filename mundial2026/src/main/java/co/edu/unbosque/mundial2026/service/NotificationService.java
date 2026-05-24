@@ -17,6 +17,13 @@ import co.edu.unbosque.mundial2026.model.User;
 import co.edu.unbosque.mundial2026.repository.UserRepository;
 import co.edu.unbosque.mundial2026.util.AESUtil;
 
+import com.google.firebase.messaging.FirebaseMessaging;
+import com.google.firebase.messaging.FirebaseMessagingException;
+import com.google.firebase.messaging.Message;
+import com.google.firebase.messaging.Notification;
+import com.google.firebase.messaging.WebpushConfig;
+import com.google.firebase.messaging.WebpushNotification;
+
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 
@@ -54,6 +61,13 @@ public class NotificationService {
 
     @Autowired
     private AuditEventService auditService;
+
+    /**
+     * Cliente de Firebase Cloud Messaging para enviar push al navegador del
+     * usuario. Inyectado por la configuración {@code FirebaseConfig}.
+     */
+    @Autowired
+    private FirebaseMessaging firebaseMessaging;
 
     /**
      * Dirección de correo remitente de la plataforma.
@@ -155,28 +169,85 @@ public class NotificationService {
     // =========================================================================
 
     /**
-     * Envía una notificación push via Firebase Cloud Messaging (FCM).
-     * En el MVP el token FCM del usuario debe estar almacenado en su perfil.
-     * Este método sirve de punto de integración; la implementación real
-     * realiza una llamada HTTP a {@code https://fcm.googleapis.com/v1/messages:send}.
+     * Envía una notificación push via Firebase Cloud Messaging (FCM) al
+     * token registrado del usuario.
+     * <p>
+     * Si el usuario no tiene token registrado (nunca autorizó push o no se
+     * ha logueado desde un navegador con FCM habilitado), se omite el envío
+     * y se retorna {@code false}. Si el token quedó inválido (porque el
+     * usuario revocó permisos o cambió de navegador), se loguea un warning
+     * y también se retorna {@code false}; idealmente debería limpiarse el
+     * token de BD, lo cual queda como mejora futura.
+     * </p>
+     * <p>
+     * Los campos {@code notificationType} y {@code resourceId} se incluyen
+     * como {@code data} del mensaje para que el cliente pueda hacer un
+     * deep-link al recurso correcto al hacer click en la notificación.
+     * </p>
      *
      * @param user             El usuario destinatario.
      * @param title            Título de la notificación push.
      * @param body             Cuerpo del mensaje.
      * @param notificationType Tipo de notificación para deep-link en el cliente.
      * @param resourceId       ID del recurso para navegación.
-     * @return {@code true} si el envío fue exitoso.
+     * @return {@code true} si FCM aceptó el envío.
      */
     private boolean sendPush(User user, String title, String body,
                               String notificationType, Long resourceId) {
-        // Punto de integración con FCM.
-        // En la implementación real se hace un POST a:
-        //   https://fcm.googleapis.com/v1/projects/{projectId}/messages:send
-        // con el token del dispositivo del usuario y el payload de la notificación.
-        // Para el MVP se registra el intento y se retorna true como stub.
-        log.info("[FCM] Enviando push a usuario {} | Título: {} | Tipo: {} | Recurso: {}",
-                user.getId(), title, notificationType, resourceId);
-        return true;
+        String token = user.getFcmToken();
+        if (token == null || token.isBlank()) {
+            log.debug("[FCM] Usuario {} no tiene token registrado, push omitido", user.getId());
+            return false;
+        }
+
+        try {
+            // Construye el mensaje con tres bloques:
+            //   1. notification: lo que muestra el SO/navegador al usuario.
+            //   2. data: payload que recibe el Service Worker / la app para
+            //      hacer deep-link al recurso.
+            //   3. webpush: opciones específicas para navegadores (icono,
+            //      click action, etc.).
+            Message message = Message.builder()
+                    .setToken(token)
+                    .setNotification(Notification.builder()
+                            .setTitle(title)
+                            .setBody(body)
+                            .build())
+                    .putData("type", notificationType != null ? notificationType : "")
+                    .putData("resourceId", resourceId != null ? resourceId.toString() : "")
+                    .setWebpushConfig(WebpushConfig.builder()
+                            .setNotification(WebpushNotification.builder()
+                                    .setTitle(title)
+                                    .setBody(body)
+                                    .setIcon("/favicon.png")
+                                    .build())
+                            .putHeader("Urgency", "high")
+                            .build())
+                    .build();
+
+            String fcmResponse = firebaseMessaging.send(message);
+            log.info("[FCM] Push enviado a user={} | type={} | resource={} | messageId={}",
+                    user.getId(), notificationType, resourceId, fcmResponse);
+            return true;
+
+        } catch (FirebaseMessagingException e) {
+            // Errores típicos:
+            //   - UNREGISTERED: el token fue revocado o ya no es válido
+            //   - INVALID_ARGUMENT: token malformado
+            //   - SENDER_ID_MISMATCH: token de otro proyecto Firebase
+            log.warn("[FCM] Falló envío a user={} | code={} | msg={}",
+                    user.getId(), e.getMessagingErrorCode(), e.getMessage());
+            // Si el token quedó inválido, lo limpiamos de BD para no seguir
+            // intentando enviar a un destino muerto.
+            if (e.getMessagingErrorCode() != null
+                    && ("UNREGISTERED".equals(e.getMessagingErrorCode().name())
+                            || "INVALID_ARGUMENT".equals(e.getMessagingErrorCode().name()))) {
+                user.setFcmToken(null);
+                userRepo.save(user);
+                log.info("[FCM] Token inválido limpiado para user={}", user.getId());
+            }
+            return false;
+        }
     }
 
     /**

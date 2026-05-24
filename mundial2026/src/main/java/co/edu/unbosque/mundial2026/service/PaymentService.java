@@ -94,6 +94,9 @@ public class PaymentService {
     @Autowired
     private UserRepository userRepo;
 
+    @Autowired
+    private NotificationService notificationService;
+
     /** Constructor por defecto. */
     public PaymentService() {
     }
@@ -296,6 +299,37 @@ public class PaymentService {
             }
             log.info("[mercadopago] {} ticket(s) actualizados a status MP={}",
                     tickets.size(), status);
+
+            // Si fue aprobado, dispara la notificación push al comprador.
+            // Se envía una sola notificación por compra (no por ticket), para
+            // no spammear cuando el usuario compra varios tickets a la vez.
+            if ("approved".equalsIgnoreCase(status) && !tickets.isEmpty()) {
+                Ticket first = tickets.get(0);
+                Long buyerId = first.getOriginalBuyer() != null
+                        ? first.getOriginalBuyer().getId() : null;
+                Match m = first.getMatch();
+                if (buyerId != null && m != null) {
+                    String title = "¡Compra confirmada!";
+                    String body = String.format("Tu compra de %d ticket(s) para %s vs %s fue exitosa.",
+                            tickets.size(),
+                            m.getHomeTeam() != null ? m.getHomeTeam().getName() : "?",
+                            m.getAwayTeam() != null ? m.getAwayTeam().getName() : "?");
+                    co.edu.unbosque.mundial2026.dto.NotificationDTO n =
+                            new co.edu.unbosque.mundial2026.dto.NotificationDTO();
+                    n.setTargetUserId(buyerId);
+                    n.setTitle(title);
+                    n.setBody(body);
+                    n.setChannel("PUSH");
+                    n.setNotificationType("TICKET_PURCHASE");
+                    n.setResourceId(m.getId());
+                    try {
+                        notificationService.sendToUser(n);
+                    } catch (Exception ex) {
+                        // No queremos que un fallo de FCM rompa el webhook.
+                        log.warn("[FCM] No se pudo enviar notificación de compra: {}", ex.getMessage());
+                    }
+                }
+            }
 
         } catch (MPException | MPApiException e) {
             log.error("[mercadopago] Error procesando webhook paymentId={}: {}",
