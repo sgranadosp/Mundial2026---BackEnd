@@ -51,6 +51,14 @@ public class TicketController {
     private TicketService ticketService;
 
     /**
+     * Servicio centralizado de auditoría. Se usa para registrar la
+     * ejecución del job de expiración con el admin ejecutor y el
+     * resultado del proceso.
+     */
+    @Autowired
+    private co.edu.unbosque.mundial2026.service.AuditEventService auditService;
+
+    /**
      * Constructor por defecto requerido por Spring.
      */
     public TicketController() {
@@ -250,15 +258,31 @@ public class TicketController {
     /**
      * Ejecuta el job de expiración de reservas. Marca como EXPIRED todas las
      * entradas en estado RESERVED cuyo TTL ya venció y libera el cupo.
-     * Solo ADMIN. Puede configurarse como {@code @Scheduled} en producción.
+     * Solo ADMIN. Registra un evento {@code SYSTEM_JOB_EXECUTED} en auditoría
+     * con el admin ejecutor, la cantidad de reservas expiradas y la fecha
+     * de ejecución (vía {@code occurredAt} del propio evento).
      *
-     * @return 200 OK con el número de reservas expiradas.
+     * @param adminId El ID del administrador que ejecuta el job. Se persiste
+     *                en el campo {@code user} del evento de auditoría para
+     *                trazabilidad de quién lanzó el proceso.
+     * @return 200 OK con el número de reservas expiradas y el resultado.
      */
     @PostMapping("/admin/expire")
     @Operation(summary = "Ejecutar expiración de reservas",
                description = "Solo ADMIN. Marca como EXPIRED las reservas vencidas y libera cupos.")
-    public ResponseEntity<?> expireReservations() {
-        int expired = ticketService.expireReservations();
+    public ResponseEntity<?> expireReservations(@RequestParam Long adminId) {
+        int expired;
+        try {
+            expired = ticketService.expireReservations();
+        } catch (RuntimeException ex) {
+            auditService.logJobExecuted(adminId, "EXPIRE_RESERVATIONS",
+                    "Error al ejecutar job de expiración: " + ex.getMessage(),
+                    co.edu.unbosque.mundial2026.model.AuditEvent.EventResult.FAILURE);
+            throw ex;
+        }
+        auditService.logJobExecuted(adminId, "EXPIRE_RESERVATIONS",
+                expired + " reservas expiradas y cupos liberados",
+                co.edu.unbosque.mundial2026.model.AuditEvent.EventResult.SUCCESS);
         return ResponseEntity.ok(
                 Map.of("message", "Job de expiración ejecutado", "expired", expired, "success", true));
     }

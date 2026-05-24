@@ -85,6 +85,14 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     private EmailService emailService;
 
     /**
+     * Servicio centralizado de auditoría. Se usa para registrar el evento
+     * {@code USER_REGISTERED} al crear un nuevo usuario, lo que alimenta
+     * la métrica "+N esta semana" del dashboard administrativo.
+     */
+    @Autowired
+    private AuditEventService auditService;
+
+    /**
      * Constructor por defecto requerido por Spring.
      */
     public UserService() {
@@ -147,6 +155,11 @@ public class UserService implements CRUDOperation<UserDTO, User> {
 
         userRepo.save(entity);
 
+        // Registrar el evento de auditoría USER_REGISTERED para el dashboard
+        // administrativo (métrica "+N esta semana"). Se usa el id ya generado
+        // por JPA tras el save anterior.
+        auditService.logUserRegistered(entity.getId());
+
         // Genera código de verificación de 6 dígitos, persiste encriptado
         // en la tabla aparte, y envía por correo.
         String codigoPlano = EmailService.generarCodigo6Digitos();
@@ -205,6 +218,22 @@ public class UserService implements CRUDOperation<UserDTO, User> {
      * @param newData El DTO con los nuevos datos de perfil.
      * @return 0 si fue actualizado; 2 si no existe; 6 si hay HTML en los campos.
      */
+    /**
+     * Actualiza los datos básicos del perfil de un usuario (nombre,
+     * preferencias de notificación, equipo favorito y ciudad preferida).
+     * No actualiza contraseña ni email por este método; esos tienen flujos
+     * dedicados.
+     * <p>
+     * Para el equipo favorito y la ciudad preferida se aplica una semántica
+     * de "set siempre": el valor enviado (incluyendo {@code null} o vacío)
+     * sobrescribe el actual. Esto permite que el usuario "limpie" su
+     * selección desde el frontend si lo desea.
+     * </p>
+     *
+     * @param id      El ID del usuario a actualizar.
+     * @param newData El DTO con los nuevos datos de perfil.
+     * @return 0 si fue actualizado; 2 si no existe; 6 si hay HTML en los campos.
+     */
     @Override
     public int updateById(Long id, UserDTO newData) {
         Optional<User> found = userRepo.findById(id);
@@ -215,6 +244,12 @@ public class UserService implements CRUDOperation<UserDTO, User> {
         if (newData.getName() != null && containsHtmlSymbols(newData.getName())) {
             return 6;
         }
+        if (newData.getFavoriteCity() != null && containsHtmlSymbols(newData.getFavoriteCity())) {
+            return 6;
+        }
+        if (newData.getFavoriteTeamCode() != null && containsHtmlSymbols(newData.getFavoriteTeamCode())) {
+            return 6;
+        }
 
         User entity = found.get();
 
@@ -223,6 +258,13 @@ public class UserService implements CRUDOperation<UserDTO, User> {
         }
         entity.setPushNotificationsEnabled(newData.isPushNotificationsEnabled());
         entity.setEmailNotificationsEnabled(newData.isEmailNotificationsEnabled());
+
+        // Preferencias: empty string se normaliza a null para no guardar basura.
+        String favTeam = newData.getFavoriteTeamCode();
+        entity.setFavoriteTeamCode(favTeam == null || favTeam.isBlank() ? null : favTeam.trim().toUpperCase());
+
+        String favCity = newData.getFavoriteCity();
+        entity.setFavoriteCity(favCity == null || favCity.isBlank() ? null : favCity.trim());
 
         userRepo.save(entity);
         return 0;

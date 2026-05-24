@@ -110,4 +110,44 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * @param username El nombre de usuario del usuario a eliminar (texto plano).
      */
     void deleteByUsername(String username);
+
+    /**
+     * Cuenta cuántos usuarios tienen al equipo indicado como favorito.
+     * Se usa en el dashboard administrativo para mostrar el alcance
+     * estimado antes de disparar una notificación masiva por equipo.
+     *
+     * @param favoriteTeamCode Código ISO del equipo (ej. "COL", "BRA").
+     * @return Número de usuarios cuyo favoriteTeamCode coincide.
+     */
+    long countByFavoriteTeamCode(String favoriteTeamCode);
+
+    /**
+     * Cuenta cuántos usuarios tienen a la ciudad indicada como ciudad
+     * preferida. Se usa para el alcance estimado de notificaciones
+     * masivas por ciudad sede.
+     *
+     * @param favoriteCity Nombre de la ciudad.
+     * @return Número de usuarios cuyo favoriteCity coincide.
+     */
+    long countByFavoriteCity(String favoriteCity);
+
+    /**
+     * Lista todos los usuarios que tienen al equipo indicado como
+     * favorito. Se usa en el broadcast masivo por equipo: el servicio
+     * itera sobre la lista enviando push/email a cada uno según sus
+     * preferencias activas.
+     *
+     * @param favoriteTeamCode Código ISO del equipo.
+     * @return Lista de usuarios que siguen al equipo.
+     */
+    List<User> findByFavoriteTeamCode(String favoriteTeamCode);
+
+    /**
+     * Lista todos los usuarios que tienen a la ciudad indicada como
+     * preferida. Se usa en el broadcast masivo por ciudad sede.
+     *
+     * @param favoriteCity Nombre de la ciudad.
+     * @return Lista de usuarios cuya ciudad preferida coincide.
+     */
+    List<User> findByFavoriteCity(String favoriteCity);
 }

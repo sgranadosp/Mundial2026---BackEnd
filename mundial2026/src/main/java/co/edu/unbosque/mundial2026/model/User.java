@@ -104,6 +104,29 @@ public class User implements UserDetails {
     @Column(name = "daily_pack_timer_started_at")
     private LocalDateTime dailyPackTimerStartedAt;
 
+    // =========================================================================
+    // Campos de preferencias del usuario (HU05 — Editar perfil)
+    // =========================================================================
+
+    /**
+     * Código ISO-3166 alfa-3 de la selección favorita del usuario
+     * (ej. "COL", "BRA", "ARG"). {@code null} si el usuario aún no ha
+     * elegido equipo favorito. Se resuelve contra
+     * {@link co.edu.unbosque.mundial2026.repository.TeamRepository#findByIsoCode}
+     * para obtener el {@link Team} cuando se necesita.
+     */
+    @Column(name = "favorite_team_code", length = 3)
+    private String favoriteTeamCode;
+
+    /**
+     * Ciudad preferida del usuario (ej. "Miami", "Los Angeles", "Ciudad de
+     * México"). Debe coincidir con alguna de las ciudades de los estadios
+     * sede del Mundial 2026 cargados en la tabla {@code stadiums}.
+     * {@code null} si el usuario aún no ha elegido ciudad preferida.
+     */
+    @Column(name = "favorite_city", length = 80)
+    private String favoriteCity;
+
     /**
      * Constructor por defecto.
      */
@@ -203,6 +226,22 @@ public class User implements UserDetails {
     public LocalDateTime getDailyPackTimerStartedAt() { return dailyPackTimerStartedAt; }
     public void setDailyPackTimerStartedAt(LocalDateTime dailyPackTimerStartedAt) {
         this.dailyPackTimerStartedAt = dailyPackTimerStartedAt;
+    }
+
+    /** @return Código ISO alfa-3 del equipo favorito, o {@code null} si no se ha elegido. */
+    public String getFavoriteTeamCode() { return favoriteTeamCode; }
+
+    /** @param favoriteTeamCode Nuevo código ISO alfa-3 del equipo favorito. */
+    public void setFavoriteTeamCode(String favoriteTeamCode) {
+        this.favoriteTeamCode = favoriteTeamCode;
+    }
+
+    /** @return Ciudad preferida del usuario, o {@code null} si no se ha elegido. */
+    public String getFavoriteCity() { return favoriteCity; }
+
+    /** @param favoriteCity Nueva ciudad preferida. */
+    public void setFavoriteCity(String favoriteCity) {
+        this.favoriteCity = favoriteCity;
     }
 
     @Override

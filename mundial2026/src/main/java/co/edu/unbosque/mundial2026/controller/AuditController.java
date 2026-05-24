@@ -125,4 +125,44 @@ public class AuditController {
         }
         return new ResponseEntity<>(events, HttpStatus.ACCEPTED);
     }
+
+    /**
+     * Obtiene los eventos de auditoría más recientes, sin filtrar por usuario
+     * ni por tipo, ordenados desde el más reciente al más antiguo.
+     * Es el feed que alimenta el panel "Actividad reciente" del Dashboard
+     * administrativo. El frontend lo refresca por polling.
+     *
+     * @param limit Cantidad máxima de eventos a devolver (default 10, máx 100).
+     * @return 202 Accepted con la lista de eventos; 204 si no hay registros.
+     */
+    @GetMapping("/recent")
+    @Operation(summary = "Actividad reciente",
+               description = "Solo ADMIN. Retorna los últimos N eventos de auditoría sin filtro, del más reciente al más antiguo.")
+    public ResponseEntity<List<AuditEventDTO>> getRecentEvents(
+            @RequestParam(defaultValue = "10") int limit) {
+        List<AuditEventDTO> events = auditService.getRecentEvents(limit);
+        if (events.isEmpty()) {
+            return new ResponseEntity<>(events, HttpStatus.NO_CONTENT);
+        }
+        return new ResponseEntity<>(events, HttpStatus.ACCEPTED);
+    }
+
+    /**
+     * Obtiene el detalle completo de un evento de auditoría por su ID.
+     * A diferencia del listado, este endpoint incluye el {@code payload}
+     * completo del evento (JSON con datos adicionales), pensado para el
+     * modal de detalle del panel administrativo.
+     *
+     * @param id ID del evento.
+     * @return 200 OK con el DTO completo (incluyendo payload), 404 si no
+     *         existe el evento.
+     */
+    @GetMapping("/{id}")
+    @Operation(summary = "Detalle de un evento",
+               description = "Solo ADMIN. Retorna el evento completo con payload JSON para inspección detallada.")
+    public ResponseEntity<AuditEventDTO> getEventById(@PathVariable Long id) {
+        return auditService.getEventById(id)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+    }
 }

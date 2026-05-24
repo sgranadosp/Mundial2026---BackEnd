@@ -14,6 +14,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import co.edu.unbosque.mundial2026.dto.AuditEventDTO;
 import co.edu.unbosque.mundial2026.model.AuditEvent;
@@ -118,6 +119,19 @@ public class AuditEventService {
     public void logUserDeleted(Long targetUserId, Long adminId) {
         log(EventType.USER_DELETED, targetUserId, null,
                 "Usuario eliminado por administrador ID " + adminId,
+                null, null, EventResult.SUCCESS);
+    }
+
+    /**
+     * Registra el cambio de rol de un usuario por un administrador (HU26).
+     *
+     * @param targetUserId El ID del usuario al que se le cambió el rol.
+     * @param adminId      El ID del administrador que realizó la acción.
+     * @param newRole      El nuevo rol asignado (ej. "USER", "ADMIN").
+     */
+    public void logUserRoleUpdated(Long targetUserId, Long adminId, String newRole) {
+        log(EventType.USER_ROLE_UPDATED, targetUserId, null,
+                "Rol cambiado a " + newRole + " por administrador ID " + adminId,
                 null, null, EventResult.SUCCESS);
     }
 
@@ -246,6 +260,25 @@ public class AuditEventService {
                 null, null, EventResult.FAILURE);
     }
 
+    /**
+     * Registra la ejecución de un job administrativo en la auditoría.
+     * Pensado para el job de expiración manual de reservas y otros
+     * procesos batch disparados desde el panel ADMIN. La descripción
+     * debe incluir métricas significativas del job (ej. cantidad de
+     * registros procesados).
+     *
+     * @param adminId       El ID del administrador que disparó el job.
+     * @param jobName       Nombre corto del job (ej. "EXPIRE_RESERVATIONS").
+     * @param description   Descripción detallada con métricas del resultado.
+     * @param result        Resultado del job ({@link EventResult#SUCCESS} si
+     *                      terminó correctamente, FAILURE si lanzó error).
+     */
+    public void logJobExecuted(Long adminId, String jobName, String description, EventResult result) {
+        log(EventType.SYSTEM_JOB_EXECUTED, adminId, null,
+                "[" + jobName + "] " + description,
+                null, null, result);
+    }
+
     // =========================================================================
     // Consultas para soporte y compliance (solo ADMIN)
     // =========================================================================
@@ -304,6 +337,70 @@ public class AuditEventService {
         return dtoList;
     }
 
+    /**
+     * Obtiene los N eventos de auditoría más recientes, sin filtrar por
+     * usuario ni tipo. Se usa en el feed "Actividad reciente" del dashboard
+     * administrativo. Los eventos vienen ordenados desde el más reciente.
+     *
+     * <p>Es {@code @Transactional(readOnly = true)} para que el proxy
+     * lazy {@code event.getUser()} pueda resolverse al construir el DTO.
+     * Cada evento se mapea dentro de un try/catch para que un registro
+     * corrupto (ej. user_id huérfano) no tumbe la respuesta entera.</p>
+     *
+     * @param limit Cantidad máxima de eventos a devolver (1-500).
+     * @return Lista de DTOs ordenados por fecha descendente. No incluye
+     *         {@code payload} para mantener el tamaño de la respuesta bajo.
+     */
+    @Transactional(readOnly = true)
+    public List<AuditEventDTO> getRecentEvents(int limit) {
+        int safeLimit = Math.max(1, Math.min(500, limit));
+        Pageable pageable = PageRequest.of(0, safeLimit,
+                Sort.by(Sort.Direction.DESC, "occurredAt"));
+        Page<AuditEvent> page = auditRepo.findAll(pageable);
+        List<AuditEventDTO> dtoList = new ArrayList<>();
+        page.forEach(e -> {
+            try {
+                dtoList.add(toDTO(e, false));
+            } catch (RuntimeException ex) {
+                // Un evento huérfano (user_id apuntando a un usuario borrado)
+                // no debe tirar abajo todo el feed. Lo registramos en log y
+                // seguimos con el siguiente.
+                System.err.println("[audit] Evento " + e.getId()
+                        + " no se pudo mapear: " + ex.getMessage());
+            }
+        });
+        return dtoList;
+    }
+
+    /**
+     * Obtiene un evento de auditoría por su ID con TODO el payload incluido.
+     * Se usa en el panel administrativo para abrir el detalle completo de
+     * un evento al hacer click en "Detalle".
+     *
+     * @param id ID del evento.
+     * @return Optional con el DTO del evento; vacío si no existe.
+     */
+    @Transactional(readOnly = true)
+    public Optional<AuditEventDTO> getEventById(Long id) {
+        return auditRepo.findById(id).map(e -> {
+            try {
+                return toDTO(e, true);
+            } catch (RuntimeException ex) {
+                // Aun con user huérfano, devolvemos un DTO básico sin user.
+                AuditEventDTO fallback = new AuditEventDTO();
+                fallback.setId(e.getId());
+                fallback.setEventType(e.getEventType());
+                fallback.setCorrelationId(e.getCorrelationId());
+                fallback.setDescription(e.getDescription());
+                fallback.setOccurredAt(e.getOccurredAt());
+                fallback.setSourceIp(e.getSourceIp());
+                fallback.setResult(e.getResult());
+                fallback.setPayload(e.getPayload());
+                return fallback;
+            }
+        });
+    }
+
     // =========================================================================
     // Helpers privados
     // =========================================================================
@@ -336,6 +433,8 @@ public class AuditEventService {
 
     /**
      * Convierte una entidad {@link AuditEvent} a {@link AuditEventDTO}.
+     * Tolera que el {@code user} sea {@code null} o un proxy huérfano
+     * (registro de auditoría apuntando a un usuario que ya fue borrado).
      *
      * @param event          La entidad del evento.
      * @param includePayload {@code true} para incluir el payload completo.
@@ -350,9 +449,17 @@ public class AuditEventService {
         dto.setOccurredAt(event.getOccurredAt());
         dto.setSourceIp(event.getSourceIp());
         dto.setResult(event.getResult());
-        if (event.getUser() != null) {
-            dto.setUserId(event.getUser().getId());
-            dto.setUsername(event.getUser().getUsername());
+        // event.getUser() puede ser null (eventos de sistema) o un proxy
+        // que tira EntityNotFoundException si el user fue borrado. En ambos
+        // casos dejamos userId/username en null.
+        try {
+            User u = event.getUser();
+            if (u != null) {
+                dto.setUserId(u.getId());
+                dto.setUsername(u.getUsername());
+            }
+        } catch (RuntimeException ignored) {
+            // Proxy lazy huérfano — registro queda sin usuario asociado.
         }
         if (includePayload) {
             dto.setPayload(event.getPayload());

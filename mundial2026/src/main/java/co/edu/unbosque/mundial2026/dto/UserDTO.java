@@ -72,6 +72,19 @@ public class UserDTO {
     private boolean enabled;
 
     /**
+     * Código ISO-3166 alfa-3 de la selección favorita del usuario
+     * (ej. "COL", "BRA"). {@code null} si aún no se ha elegido.
+     */
+    private String favoriteTeamCode;
+
+    /**
+     * Ciudad preferida del usuario, debe coincidir con alguna ciudad sede del
+     * Mundial 2026 cargada en la tabla {@code stadiums}. {@code null} si aún
+     * no se ha elegido.
+     */
+    private String favoriteCity;
+
+    /**
      * Constructor por defecto de {@code UserDTO}.
      */
     public UserDTO() {
@@ -159,6 +172,20 @@ public class UserDTO {
 
     /** @param enabled Nuevo estado de habilitación de cuenta. */
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+    /** @return El código ISO alfa-3 del equipo favorito (puede ser {@code null}). */
+    public String getFavoriteTeamCode() { return favoriteTeamCode; }
+
+    /** @param favoriteTeamCode Nuevo código ISO alfa-3 del equipo favorito. */
+    public void setFavoriteTeamCode(String favoriteTeamCode) {
+        this.favoriteTeamCode = favoriteTeamCode;
+    }
+
+    /** @return La ciudad preferida del usuario (puede ser {@code null}). */
+    public String getFavoriteCity() { return favoriteCity; }
+
+    /** @param favoriteCity Nueva ciudad preferida. */
+    public void setFavoriteCity(String favoriteCity) { this.favoriteCity = favoriteCity; }
 
     // =========================================================================
     // equals, hashCode, toString

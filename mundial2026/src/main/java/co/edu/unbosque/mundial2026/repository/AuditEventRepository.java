@@ -103,4 +103,20 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, Long> {
      */
     long countByUserIdAndEventTypeAndOccurredAtBetween(Long userId, EventType eventType,
                                                         LocalDateTime start, LocalDateTime end);
+
+    /**
+     * Cuenta el número total de eventos de un tipo específico en un rango
+     * de tiempo, SIN filtrar por usuario. Se usa en el dashboard
+     * administrativo para métricas globales: por ejemplo, "+N usuarios
+     * registrados esta semana" se calcula contando los eventos
+     * {@code USER_REGISTERED} de los últimos 7 días.
+     *
+     * @param eventType El tipo de evento.
+     * @param start     Inicio del rango de tiempo (inclusive).
+     * @param end       Fin del rango de tiempo (inclusive).
+     * @return Número de eventos del tipo indicado en el rango dado.
+     */
+    long countByEventTypeAndOccurredAtBetween(EventType eventType,
+                                               LocalDateTime start,
+                                               LocalDateTime end);
 }

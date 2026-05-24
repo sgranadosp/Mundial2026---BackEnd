@@ -53,8 +53,11 @@ public class AuditEvent {
     /**
      * Tipo del evento, definido mediante el enum {@link EventType}.
      * Se usa para filtrar y categorizar eventos en el panel de soporte.
+     * La longitud explícita garantiza que MySQL no trunque valores
+     * nuevos del enum al actualizar el esquema con {@code ddl-auto=update}.
      */
     @Enumerated(EnumType.STRING)
+    @Column(length = 64, nullable = false)
     private EventType eventType;
 
     /**
@@ -214,7 +217,14 @@ public class AuditEvent {
         /** Patrón anómalo detectado; cuenta limitada temporalmente. */
         FRAUD_PATTERN_DETECTED,
         /** Caso de investigación abierto por compliance. */
-        INVESTIGATION_OPENED
+        INVESTIGATION_OPENED,
+
+        // --- Sistema / jobs administrativos ---
+        /**
+         * Ejecución manual o programada de un job administrativo
+         * (ej. expiración masiva de reservas vencidas).
+         */
+        SYSTEM_JOB_EXECUTED
     }
 
     /**

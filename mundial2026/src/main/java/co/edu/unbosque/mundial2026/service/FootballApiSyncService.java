@@ -188,18 +188,37 @@ public class FootballApiSyncService {
      * Como no tenemos ciudad por separado, queda en null.
      * </p>
      */
+    /**
+     * Resuelve un estadio a partir del nombre de la venue que viene en el
+     * payload de football-data.org. Estrategia:
+     * <ul>
+     *   <li>Si no hay nombre → null (el partido conservará el estadio
+     *       previamente asignado por {@code OpenFootballSyncService}, si lo
+     *       tiene).</li>
+     *   <li>Si el nombre matchea un estadio existente → lo devuelve sin
+     *       tocarlo (preserva latitud/longitud sincronizados por openfootball).</li>
+     *   <li>Si NO matchea ningún estadio existente → devuelve null. NO crea
+     *       estadios fantasma sin coordenadas; en su lugar deja el campo
+     *       intacto en {@link #upsertMatch} para que el partido siga
+     *       apuntando al estadio correcto si ya lo tenía. Si el partido es
+     *       totalmente nuevo y no tiene estadio, el operador deberá correr
+     *       el sync de venues para completarlo.</li>
+     * </ul>
+     */
     private Stadium resolveStadium(String venueName, Map<String, Stadium> cache) {
         if (venueName == null || venueName.isBlank()) return null;
         if (cache.containsKey(venueName)) {
             return cache.get(venueName);
         }
-        Stadium stadium = stadiumRepo.findByName(venueName)
-                .orElseGet(() -> {
-                    Stadium s = new Stadium();
-                    s.setName(venueName);
-                    return stadiumRepo.save(s);
-                });
-        cache.put(venueName, stadium);
+        Stadium stadium = stadiumRepo.findByName(venueName).orElse(null);
+        if (stadium != null) {
+            cache.put(venueName, stadium);
+        } else {
+            log.debug("[sync/fixtures] Venue '{}' no matchea ningún Stadium "
+                    + "en BD; se conserva el estadio actual del partido. "
+                    + "Ejecuta /admin/sync/venues si quieres completarlo.",
+                    venueName);
+        }
         return stadium;
     }
 
@@ -213,7 +232,14 @@ public class FootballApiSyncService {
         match.setExternalId(externalId);
         match.setHomeTeam(home);
         match.setAwayTeam(away);
-        match.setStadium(stadium);
+        // Solo sobrescribir el estadio si recibimos uno válido. Si stadium
+        // viene null (football-data no envió venue para este partido o el
+        // nombre no matcheó con ninguno en BD) preservamos el estadio
+        // existente que probablemente fue asignado por OpenFootballSyncService
+        // y tiene latitud/longitud completas.
+        if (stadium != null) {
+            match.setStadium(stadium);
+        }
         match.setScheduledAt(parseUtcDate(item.getUtcDate()));
         match.setPhase(Phase.GROUP_STAGE);
         match.setStatus(mapStatus(item.getStatus()));

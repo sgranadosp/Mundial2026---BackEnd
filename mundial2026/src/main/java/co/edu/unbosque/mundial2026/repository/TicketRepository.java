@@ -129,4 +129,30 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
      * @return {@code true} si ya existe una entrada con ese correlationId.
      */
     boolean existsByCorrelationId(String correlationId);
+
+    /**
+     * Cuenta cuántas entradas hay en alguno de los estados indicados.
+     * Se usa en el dashboard administrativo para mostrar el total de
+     * entradas activas (RESERVED + PAID) sin cargar la lista completa.
+     *
+     * @param statuses Lista de estados a contar.
+     * @return Número de entradas en alguno de los estados indicados.
+     */
+    long countByStatusIn(java.util.Collection<TicketStatus> statuses);
+
+    /**
+     * Cuenta cuántas reservas tienen status {@code RESERVED} y cuyo
+     * {@code reservationExpiresAt} cae en una ventana de tiempo.
+     * Se usa en el dashboard administrativo para mostrar cuántas
+     * reservas expiran en los próximos N minutos y permitir al admin
+     * decidir si dispara el job de expiración manualmente.
+     *
+     * @param status El estado a filtrar (normalmente {@code RESERVED}).
+     * @param start  Inicio de la ventana de tiempo (inclusive).
+     * @param end    Fin de la ventana de tiempo (inclusive).
+     * @return Número de reservas que expiran en la ventana indicada.
+     */
+    long countByStatusAndReservationExpiresAtBetween(TicketStatus status,
+                                                      LocalDateTime start,
+                                                      LocalDateTime end);
 }

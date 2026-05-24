@@ -133,4 +133,14 @@ public interface MatchRepository extends JpaRepository<Match, Long> {
      * @return {@code true} si ya existe un partido con ese ID externo.
      */
     boolean existsByExternalId(Long externalId);
+
+    /**
+     * Cuenta cuántos partidos hay en un estado específico. Se usa en el
+     * dashboard administrativo para mostrar partidos en vivo, programados,
+     * o finalizados sin cargar la lista completa.
+     *
+     * @param status El estado a contar.
+     * @return Número de partidos en el estado indicado.
+     */
+    long countByStatus(MatchStatus status);
 }

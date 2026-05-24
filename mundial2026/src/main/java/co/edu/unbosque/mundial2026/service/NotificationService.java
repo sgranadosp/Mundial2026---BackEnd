@@ -4,6 +4,7 @@
 package co.edu.unbosque.mundial2026.service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -115,53 +116,94 @@ public class NotificationService {
     }
 
     /**
-     * Envía una notificación masiva a todos los usuarios suscritos a un equipo
-     * específico. Reservado para uso futuro cuando exista la tabla de
-     * preferencias de usuario (equipo favorito).
-     * <p>
-     * <b>Estado actual:</b> stub — no envía nada y retorna 0. Cuando se
-     * implemente la preferencia de equipo favorito, esta firma puede consumir
-     * un nuevo repositorio de preferencias para filtrar usuarios.
-     * </p>
+     * Envía una notificación masiva a todos los usuarios que tienen al
+     * equipo indicado como favorito. Para cada usuario destinatario:
+     *   - Envía push si tiene push habilitado y token FCM válido.
+     *   - Envía email si tiene email habilitado.
+     *   - Registra el evento de auditoría con resultado SUCCESS o FAILURE.
      *
-     * @param teamIsoCode      El código ISO del equipo (ej. "COL", "BRA").
+     * Solo se cuentan como "notificados" los usuarios donde al menos un
+     * canal aceptó el envío. Si un usuario no tiene canales activos o
+     * todos fallan, se registra FAILURE pero no se cuenta.
+     *
+     * @param teamIsoCode      Código ISO del equipo (ej. "COL", "BRA").
      * @param title            Título de la notificación.
      * @param body             Cuerpo del mensaje.
-     * @param notificationType Tipo de notificación para enrutamiento en el cliente.
-     * @param resourceId       ID del partido o recurso asociado.
-     * @return Número de usuarios notificados (0 en la implementación actual).
+     * @param notificationType Tipo de notificación para deep-link.
+     * @param resourceId       ID del partido o recurso asociado (opcional).
+     * @return Número de usuarios efectivamente notificados (al menos un
+     *         canal aceptó el envío).
      */
     public int sendToTeamFollowers(String teamIsoCode, String title,
                                     String body, String notificationType, Long resourceId) {
-        log.warn("sendToTeamFollowers invocado para equipo {} pero la preferencia"
-                + " 'equipo favorito' no está implementada en este MVP. No se envió nada.",
-                teamIsoCode);
-        return 0;
+        if (teamIsoCode == null || teamIsoCode.isBlank()) {
+            log.warn("sendToTeamFollowers: código de equipo vacío, no se envía nada.");
+            return 0;
+        }
+        String code = teamIsoCode.toUpperCase();
+        List<User> followers = userRepo.findByFavoriteTeamCode(code);
+        log.info("[broadcast/team] Encontrados {} seguidores del equipo {}", followers.size(), code);
+
+        int notified = 0;
+        for (User user : followers) {
+            boolean sent = false;
+            if (user.isPushNotificationsEnabled()) {
+                sent = sendPush(user, title, body, notificationType, resourceId);
+            }
+            if (user.isEmailNotificationsEnabled()) {
+                sent = sendEmail(user, title, body) || sent;
+            }
+            if (sent) {
+                auditService.logNotificationSent(user.getId(), "BROADCAST_TEAM:" + code, title);
+                notified++;
+            } else {
+                auditService.logNotificationFailed(user.getId(),
+                        "Broadcast equipo " + code + ": sin canales activos o todos los canales fallaron");
+            }
+        }
+        return notified;
     }
 
     /**
-     * Envía una notificación masiva a todos los usuarios cuya ciudad preferida
-     * coincide con la ciudad indicada. Reservado para uso futuro cuando exista
-     * la tabla de preferencias de usuario (ciudad preferida).
-     * <p>
-     * <b>Estado actual:</b> stub — no envía nada y retorna 0. Cuando se
-     * implemente la preferencia de ciudad, esta firma puede consumir un nuevo
-     * repositorio de preferencias para filtrar usuarios.
-     * </p>
+     * Envía una notificación masiva a todos los usuarios cuya ciudad
+     * preferida coincide con la indicada. Mismo patrón que
+     * {@link #sendToTeamFollowers}: envía push y/o email por usuario
+     * según sus canales activos y audita cada envío.
      *
-     * @param city             La ciudad del estadio.
+     * @param city             Nombre de la ciudad.
      * @param title            Título de la notificación.
      * @param body             Cuerpo del mensaje.
      * @param notificationType Tipo de notificación.
-     * @param resourceId       ID del recurso asociado.
-     * @return Número de usuarios notificados (0 en la implementación actual).
+     * @param resourceId       ID del recurso asociado (opcional).
+     * @return Número de usuarios efectivamente notificados.
      */
     public int sendToCityFollowers(String city, String title,
                                     String body, String notificationType, Long resourceId) {
-        log.warn("sendToCityFollowers invocado para ciudad {} pero la preferencia"
-                + " 'ciudad preferida' no está implementada en este MVP. No se envió nada.",
-                city);
-        return 0;
+        if (city == null || city.isBlank()) {
+            log.warn("sendToCityFollowers: ciudad vacía, no se envía nada.");
+            return 0;
+        }
+        List<User> followers = userRepo.findByFavoriteCity(city);
+        log.info("[broadcast/city] Encontrados {} usuarios en {}", followers.size(), city);
+
+        int notified = 0;
+        for (User user : followers) {
+            boolean sent = false;
+            if (user.isPushNotificationsEnabled()) {
+                sent = sendPush(user, title, body, notificationType, resourceId);
+            }
+            if (user.isEmailNotificationsEnabled()) {
+                sent = sendEmail(user, title, body) || sent;
+            }
+            if (sent) {
+                auditService.logNotificationSent(user.getId(), "BROADCAST_CITY:" + city, title);
+                notified++;
+            } else {
+                auditService.logNotificationFailed(user.getId(),
+                        "Broadcast ciudad " + city + ": sin canales activos o todos los canales fallaron");
+            }
+        }
+        return notified;
     }
 
     // =========================================================================

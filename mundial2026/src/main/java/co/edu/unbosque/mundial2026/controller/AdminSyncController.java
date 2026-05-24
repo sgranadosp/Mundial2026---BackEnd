@@ -13,8 +13,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import co.edu.unbosque.mundial2026.model.AuditEvent.EventResult;
+import co.edu.unbosque.mundial2026.service.AuditEventService;
 import co.edu.unbosque.mundial2026.service.FootballApiSyncService;
 import co.edu.unbosque.mundial2026.service.FootballApiSyncService.SyncReport;
 import co.edu.unbosque.mundial2026.service.OpenFootballSyncService;
@@ -28,7 +31,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
  * APIs externas.
  * <p>
  * Todos los endpoints aquí están restringidos a usuarios con rol ADMIN
- * mediante {@code @PreAuthorize("hasRole('ADMIN')")}.
+ * mediante {@code @PreAuthorize("hasRole('ADMIN')")}. Cada operación
+ * queda registrada en auditoría con el administrador ejecutor, la
+ * cantidad de registros sincronizados y el resultado.
  * </p>
  */
 @RestController
@@ -45,6 +50,13 @@ public class AdminSyncController {
     @Autowired
     private OpenFootballSyncService venuesSyncService;
 
+    /**
+     * Servicio centralizado de auditoría para registrar la ejecución
+     * de los jobs de sincronización.
+     */
+    @Autowired
+    private AuditEventService auditService;
+
     /** Constructor por defecto requerido por Spring. */
     public AdminSyncController() {
     }
@@ -57,15 +69,31 @@ public class AdminSyncController {
      * football-data.org). Se recomienda ejecutarla puntualmente, no en bucle.
      * </p>
      *
+     * @param adminId El ID del administrador que dispara la sincronización.
+     *                Se persiste en el evento de auditoría
+     *                {@code SYSTEM_JOB_EXECUTED} para trazabilidad de quién
+     *                consumió cuota de la API externa y cuándo.
      * @return Reporte JSON con métricas de la sincronización.
      */
     @PostMapping("/fixtures")
     @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Sincroniza fixtures de fase de grupos del Mundial 2026",
                description = "Trae los partidos desde football-data.org y los upsertea en la BD local. Solo admin.")
-    public ResponseEntity<Map<String, Object>> syncFixtures() {
-        log.info("Admin solicitó sincronización de fixtures");
-        SyncReport report = syncService.syncGroupStageFixtures();
+    public ResponseEntity<Map<String, Object>> syncFixtures(@RequestParam Long adminId) {
+        log.info("Admin {} solicitó sincronización de fixtures", adminId);
+        SyncReport report;
+        try {
+            report = syncService.syncGroupStageFixtures();
+        } catch (RuntimeException ex) {
+            auditService.logJobExecuted(adminId, "SYNC_FIXTURES",
+                    "Error al sincronizar partidos desde football-data.org: " + ex.getMessage(),
+                    EventResult.FAILURE);
+            throw ex;
+        }
+        auditService.logJobExecuted(adminId, "SYNC_FIXTURES",
+                report.synced + " partidos sincronizados desde football-data.org (" + report.fetchedFromApi
+                        + " recibidos, " + report.errors + " errores)",
+                report.errors > 0 ? EventResult.FAILURE : EventResult.SUCCESS);
 
         Map<String, Object> response = new HashMap<>();
         response.put("message", "Sincronización completada");

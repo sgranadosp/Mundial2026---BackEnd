@@ -142,6 +142,13 @@ public class SecurityConfig {
 
                 auth.requestMatchers("/ranking/**").hasAnyRole("USER", "ADMIN");
 
+                // Catálogos de selecciones y estadios para preferencias del perfil (HU05).
+                auth.requestMatchers(
+                        "GET:/teams",
+                        "GET:/teams/**",
+                        "GET:/stadiums",
+                        "GET:/stadiums/**").hasAnyRole("USER", "ADMIN");
+
                 // Rutas exclusivas de ADMIN
                 auth.requestMatchers(
                         "GET:/users",
@@ -158,6 +165,7 @@ public class SecurityConfig {
                 auth.requestMatchers("/notifications/**").hasRole("ADMIN");
                 auth.requestMatchers("POST:/tickets/admin/**").hasRole("ADMIN");
                 auth.requestMatchers("/admin/audit/**").hasRole("ADMIN");
+                auth.requestMatchers("/admin/dashboard/**").hasRole("ADMIN");
                 auth.requestMatchers("/admin/sync/**").hasRole("ADMIN");
                 auth.requestMatchers("POST:/album/user/*/packages/grant").hasRole("ADMIN");
 

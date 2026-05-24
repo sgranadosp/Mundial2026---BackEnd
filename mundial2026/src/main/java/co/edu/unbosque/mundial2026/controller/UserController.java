@@ -267,7 +267,9 @@ public class UserController {
     @PutMapping("/{id}/role")
     @Operation(summary = "Asignar rol",
                description = "Solo ADMIN. Asigna rol USER o ADMIN al usuario indicado.")
-    public ResponseEntity<?> updateRole(@PathVariable Long id, @RequestParam String role) {
+    public ResponseEntity<?> updateRole(@PathVariable Long id,
+                                         @RequestParam String role,
+                                         @RequestParam Long adminId) {
         Role parsedRole;
         try {
             parsedRole = Role.valueOf(role.toUpperCase());
@@ -277,6 +279,10 @@ public class UserController {
         }
 
         int status = userService.updateRole(id, parsedRole);
+
+        if (status == 0) {
+            auditService.logUserRoleUpdated(id, adminId, parsedRole.name());
+        }
 
         return switch (status) {
             case 0 -> ResponseEntity.status(HttpStatus.ACCEPTED)
