@@ -98,9 +98,16 @@ public class EmailService {
 	 * @param codigo        Código de 6 dígitos en texto plano.
 	 */
 	public void enviarCodigoVerificacion(String destinatario, String nombreUsuario, String codigo) {
+		log.info("[verif] Iniciando envío de código de verificación a destinatario='{}', nombre='{}'",
+				destinatario, nombreUsuario);
+		if (destinatario == null || destinatario.isBlank()) {
+			log.error("[verif] Destinatario nulo o vacío — no se envía nada");
+			return;
+		}
 		String asunto = "Verifica tu cuenta de Mundial 2026 Hub";
 		String html = construirHtmlVerificacion(nombreUsuario, codigo);
 		enviarHtml(destinatario, asunto, html);
+		log.info("[verif] enviarHtml() retornó sin lanzar excepción para {}", destinatario);
 	}
 
 	/**
@@ -349,6 +356,8 @@ public class EmailService {
 	 */
 	private void enviarHtml(String destinatario, String asunto, String htmlBody) {
 		try {
+			log.info("[mail] Construyendo MIME para destinatario='{}', asunto='{}', remitente configurado='{}'",
+					destinatario, asunto, remitente);
 			MimeMessage mensaje = mailSender.createMimeMessage();
 			MimeMessageHelper helper = new MimeMessageHelper(mensaje, true, "UTF-8");
 			helper.setFrom(remitente, "Mundial 2026 Hub");
@@ -358,9 +367,9 @@ public class EmailService {
 			mailSender.send(mensaje);
 			log.info("Correo HTML enviado correctamente a {}", destinatario);
 		} catch (MessagingException | java.io.UnsupportedEncodingException e) {
-			log.error("Error al enviar correo a {}: {}", destinatario, e.getMessage());
+			log.error("Error al enviar correo a {}: {}", destinatario, e.getMessage(), e);
 		} catch (Exception e) {
-			log.error("Error inesperado al enviar correo a {}: {}", destinatario, e.getMessage());
+			log.error("Error inesperado al enviar correo a {}: {}", destinatario, e.getMessage(), e);
 		}
 	}
 

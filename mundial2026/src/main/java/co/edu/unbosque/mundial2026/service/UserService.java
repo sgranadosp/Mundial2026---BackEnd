@@ -21,6 +21,8 @@ import co.edu.unbosque.mundial2026.model.VerificationCode.Purpose;
 import co.edu.unbosque.mundial2026.repository.UserRepository;
 import co.edu.unbosque.mundial2026.repository.VerificationCodeRepository;
 import co.edu.unbosque.mundial2026.util.AESUtil;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 
 /**
  * Servicio encargado de la lógica de negocio relacionada con la entidad
@@ -91,6 +93,16 @@ public class UserService implements CRUDOperation<UserDTO, User> {
      */
     @Autowired
     private AuditEventService auditService;
+
+    /**
+     * EntityManager nativo de JPA. Se usa para ejecutar DELETEs nativos
+     * sobre las tablas dependientes del usuario en {@link #deleteById(Long)}.
+     * Es más eficiente que cargar todas las entidades en memoria y borrarlas
+     * una por una con sus repositorios respectivos, y evita tener que
+     * inyectar 10 repositorios distintos solo para hacer cleanup.
+     */
+    @PersistenceContext
+    private EntityManager entityManager;
 
     /**
      * Constructor por defecto requerido por Spring.
@@ -200,13 +212,150 @@ public class UserService implements CRUDOperation<UserDTO, User> {
     @Transactional
     public int deleteById(Long id) {
         Optional<User> found = userRepo.findById(id);
-        if (found.isPresent()) {
-            User u = found.get();
-            codeRepo.deleteByEmail(u.getEmail());
-            userRepo.delete(u);
-            return 0;
+        if (found.isEmpty()) {
+            return 2;
         }
-        return 2;
+        User u = found.get();
+
+        /*
+         * MySQL no permite borrar un usuario directamente porque muchas
+         * tablas mantienen FKs hacia users(id). Antes de delete() hay que
+         * limpiar todas las referencias, en este orden:
+         *
+         *  1. Tablas con datos personales del usuario que pierden todo
+         *     significado sin él: notification_inbox, support_tickets,
+         *     sticker_packs, user_stickers, predictions, trade_rejections,
+         *     poll_group_members. Se borran físicamente.
+         *
+         *  2. Pollas donde el usuario es OWNER: borrar el grupo entero
+         *     (el cascade de poll_group_members se encarga de los miembros).
+         *
+         *  3. Solicitudes de intercambio creadas por él: borrar.
+         *     Solicitudes que él aceptó: poner accepted_by_id = NULL para
+         *     preservar el historial del creador.
+         *
+         *  4. Entradas (tickets) donde es holder: poner holder_id = NULL
+         *     para preservar el histórico de transacciones del estadio.
+         *
+         *  5. Audit events: poner user_id = NULL para preservar la línea
+         *     de tiempo de auditoría sin atar al usuario eliminado.
+         *
+         *  6. Códigos de verificación (por email): borrar.
+         *
+         *  7. Finalmente, borrar el usuario.
+         *
+         * Todo en la misma transacción gracias a @Transactional.
+         */
+        executeNativeUpdate("DELETE FROM notification_inbox WHERE user_id = ?1", id);
+        executeNativeUpdate("DELETE FROM support_tickets   WHERE user_id = ?1", id);
+        executeNativeUpdate("DELETE FROM user_stickers     WHERE user_id = ?1", id);
+        executeNativeUpdate("DELETE FROM sticker_packs     WHERE user_id = ?1", id);
+        executeNativeUpdate("DELETE FROM predictions       WHERE user_id = ?1", id);
+        executeNativeUpdate("DELETE FROM trade_rejections  WHERE user_id = ?1", id);
+        executeNativeUpdate("DELETE FROM poll_group_members WHERE user_id = ?1", id);
+
+        // Pollas que el usuario era dueño: borrar el grupo entero. Antes
+        // hay que limpiar la tabla join porque MySQL la valida también.
+        executeNativeUpdate(
+                "DELETE FROM poll_group_members WHERE group_id IN "
+                + "(SELECT id FROM poll_groups WHERE owner_id = ?1)", id);
+        executeNativeUpdate("DELETE FROM poll_groups WHERE owner_id = ?1", id);
+
+        // Intercambios: borrar los que él creó, anular los que solo aceptó.
+        executeNativeUpdate("DELETE FROM trade_requests WHERE creator_id = ?1", id);
+        executeNativeUpdate(
+                "UPDATE trade_requests SET accepted_by_id = NULL WHERE accepted_by_id = ?1", id);
+
+        // Tickets: anular holder para preservar histórico.
+        executeNativeUpdate("UPDATE tickets SET holder_id = NULL WHERE holder_id = ?1", id);
+
+        // Auditoría: anular el FK para preservar la línea de tiempo.
+        executeNativeUpdate("UPDATE audit_events SET user_id = NULL WHERE user_id = ?1", id);
+
+        // Códigos de verificación (key = email, no id).
+        codeRepo.deleteByEmail(u.getEmail());
+
+        // Forzamos un flush para que JPA aplique los UPDATE/DELETE nativos
+        // antes del delete final del usuario. Sin esto, el contexto de
+        // persistencia podría tener el orden invertido y la FK aún vería
+        // las filas viejas.
+        entityManager.flush();
+
+        userRepo.delete(u);
+        return 0;
+    }
+
+    /**
+     * Ejecuta un UPDATE/DELETE nativo con un parámetro posicional.
+     * Helper interno para mantener {@link #deleteById(Long)} legible.
+     *
+     * <p>Antes de ejecutar la consulta, verifica que la tabla involucrada
+     * exista en la BD. Esto es necesario porque Spring marca la transacción
+     * como "rollback-only" en cuanto Hibernate lanza una SQLException, lo
+     * que provoca un {@code UnexpectedRollbackException} al hacer commit
+     * aunque atrapemos la excepción en este nivel. La verificación previa
+     * con {@code information_schema.tables} no consume el contexto de
+     * persistencia (es un SELECT en una BD del sistema, no toca las
+     * entidades JPA), así que es seguro.</p>
+     *
+     * <p>Esto permite que el cleanup funcione tanto si todas las tablas
+     * opcionales (como {@code support_tickets} de la Tanda C de Tickets
+     * de Soporte) ya fueron creadas por Hibernate como si todavía no.</p>
+     */
+    private void executeNativeUpdate(String sql, Long userId) {
+        String tableName = extractTableName(sql);
+        if (tableName != null && !tableExists(tableName)) {
+            // Tabla aún no creada: lo ignoramos, no hay nada que limpiar.
+            return;
+        }
+        entityManager.createNativeQuery(sql)
+                .setParameter(1, userId)
+                .executeUpdate();
+    }
+
+    /**
+     * Extrae el nombre de la primera tabla mencionada en un SQL nativo
+     * (después de FROM, UPDATE o INTO). Devuelve {@code null} si no se
+     * puede determinar (en cuyo caso ejecutamos la query y dejamos que
+     * Hibernate decida).
+     */
+    private String extractTableName(String sql) {
+        if (sql == null) return null;
+        String normalized = sql.trim().toLowerCase().replaceAll("\\s+", " ");
+        String[] keywords = { "delete from ", "update ", "insert into " };
+        for (String kw : keywords) {
+            int idx = normalized.indexOf(kw);
+            if (idx >= 0) {
+                int start = idx + kw.length();
+                int end = normalized.indexOf(' ', start);
+                if (end < 0) end = normalized.length();
+                return normalized.substring(start, end).trim();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Verifica si una tabla existe en la BD actual consultando
+     * {@code information_schema.tables}. Es una consulta de solo lectura
+     * sobre el catálogo del sistema, no afecta a la transacción JPA en
+     * curso.
+     */
+    private boolean tableExists(String tableName) {
+        try {
+            Object result = entityManager.createNativeQuery(
+                    "SELECT COUNT(*) FROM information_schema.tables "
+                    + "WHERE table_schema = DATABASE() AND table_name = ?1")
+                    .setParameter(1, tableName)
+                    .getSingleResult();
+            if (result == null) return false;
+            return ((Number) result).intValue() > 0;
+        } catch (Exception ex) {
+            // Si la metaconsulta falla por cualquier razón, asumimos que
+            // sí existe y dejamos que el DELETE original determine la
+            // realidad. Es la opción menos sorpresiva.
+            return true;
+        }
     }
 
     /**

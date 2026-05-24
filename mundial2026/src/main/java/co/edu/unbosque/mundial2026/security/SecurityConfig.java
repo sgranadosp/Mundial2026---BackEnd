@@ -189,6 +189,34 @@ public class SecurityConfig {
                 auth.requestMatchers("/admin/sync/**").hasRole("ADMIN");
                 auth.requestMatchers("POST:/album/user/*/packages/grant").hasRole("ADMIN");
 
+                /*
+                 * Tickets de soporte. USER puede crear, listar los suyos y
+                 * eliminar los propios cerrados. ADMIN puede listar y
+                 * responder. Mismo patrón de seguridad que el inbox de
+                 * notificaciones: HttpMethod como primer argumento para que
+                 * Spring Security matchee bien por verbo HTTP.
+                 *
+                 * - USER + ADMIN: POST (crear), DELETE (eliminar propio),
+                 *                 GET /mine.
+                 * - ADMIN-only:   GET (listar OPEN), GET /all, PUT respond.
+                 */
+                auth.requestMatchers(
+                        org.springframework.http.HttpMethod.POST,
+                        "/support/tickets").hasAnyRole("USER", "ADMIN");
+                auth.requestMatchers(
+                        org.springframework.http.HttpMethod.GET,
+                        "/support/tickets/mine").hasAnyRole("USER", "ADMIN");
+                auth.requestMatchers(
+                        org.springframework.http.HttpMethod.DELETE,
+                        "/support/tickets/**").hasAnyRole("USER", "ADMIN");
+                auth.requestMatchers(
+                        org.springframework.http.HttpMethod.GET,
+                        "/support/tickets",
+                        "/support/tickets/all").hasRole("ADMIN");
+                auth.requestMatchers(
+                        org.springframework.http.HttpMethod.PUT,
+                        "/support/tickets/**").hasRole("ADMIN");
+
                 // Cualquier otra solicitud requiere autenticación
                 auth.anyRequest().authenticated();
             })
