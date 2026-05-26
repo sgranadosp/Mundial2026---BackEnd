@@ -65,7 +65,7 @@ public class PaymentService {
     private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
 
     /** Precio fijo por ticket en pesos colombianos. */
-    private static final double TICKET_PRICE_COP = 250_000.0;
+    private static final double TICKET_PRICE_COP = 1_000.0;
 
     /** Moneda usada con MercadoPago Colombia. */
     private static final String CURRENCY = "COP";
